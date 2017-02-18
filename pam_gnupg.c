@@ -189,23 +189,28 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
     exit(EXIT_FAILURE);
 }
 
-int read_keygrip(const struct userinfo *user, char *keygrip) {
+FILE *open_keygrip_file(const struct userinfo *user) {
     char keygrip_file[1024];
-    FILE *file;
-
     if (snprintf(keygrip_file, sizeof(keygrip_file),
                  "%s/.gnupg/pam-gnupg-keygrip", user->home) >= sizeof(keygrip_file)) {
         return FALSE;
     }
-    if ((file = fopen(keygrip_file, "r")) == NULL) {
+    return fopen(keygrip_file, "r");
+}
+
+int extract_keygrip(const char *line, char *keygrip) {
+    const char *cur = line;
+    while (*cur && strchr(" \t\n\r\f\v", *cur)) {
+        cur++;
+    }
+    if (!*cur || *cur == '#') {
         return FALSE;
     }
-    if (fread(keygrip, KEYGRIP_LENGTH, 1, file) != 1) {
-        fclose(file);
-        return FALSE;
-    }
-    fclose(file);
+    strncpy(keygrip, cur, KEYGRIP_LENGTH);
     keygrip[KEYGRIP_LENGTH] = 0;
+    if (strlen(keygrip) != KEYGRIP_LENGTH) {
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -240,12 +245,15 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     const char *tok;
     struct userinfo *user;
     struct sigaction handlers[2];
+    FILE *file = NULL;
+    char *line = NULL;
+    size_t len = 0;
 
     if (!get_userinfo(pamh, &user)) {
         goto end;
     }
 
-    if (!read_keygrip(user, keygrip)) {
+    if ((file = open_keygrip_file(user)) == NULL) {
         goto end;
     }
 
@@ -255,15 +263,27 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
 
     setup_sigs(handlers);
 
-    if (!preset_passphrase(user, keygrip, tok)) {
-        /* We did not succeed setting the passphrase. Maybe the agent is not
-         * running? Store token and try again in open_session. */
-        pam_set_data(pamh, "pam-gnupg-token", (void *) strdup(tok), cleanup_token);
+    while (getline(&line, &len, file) != -1) {
+        if (!extract_keygrip(line, keygrip)) {
+            continue;
+        }
+        if (!preset_passphrase(user, keygrip, tok)) {
+            /* We did not succeed setting the passphrase. Maybe the agent is not
+             * running? Store token and try again in open_session. */
+            pam_set_data(pamh, "pam-gnupg-token", (void *) strdup(tok), cleanup_token);
+            break;
+        }
     }
 
     restore_sigs(handlers);
 
 end:
+    if (file != NULL) {
+        fclose(file);
+    }
+    if (line != NULL) {
+        free(line);
+    }
     free_userinfo(user);
     return PAM_IGNORE;
 }
@@ -277,6 +297,9 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
     const char *tok;
     struct userinfo *user;
     struct sigaction handlers[2];
+    FILE *file = NULL;
+    char *line = NULL;
+    size_t len = 0;
 
     if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS) {
         return PAM_IGNORE;
@@ -286,7 +309,7 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
         goto end;
     }
 
-    if (!read_keygrip(user, keygrip)) {
+    if ((file = open_keygrip_file(user)) == NULL) {
         goto end;
     }
 
@@ -297,12 +320,23 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
         goto end;
     }
 
-    preset_passphrase(user, keygrip, tok);
+    while (getline(&line, &len, file) != -1) {
+        if (!extract_keygrip(line, keygrip)) {
+            continue;
+        }
+        preset_passphrase(user, keygrip, tok);
+    }
 
     restore_sigs(handlers);
 
 end:
     pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);
+    if (file != NULL) {
+        fclose(file);
+    }
+    if (line != NULL) {
+        free(line);
+    }
     free_userinfo(user);
     return PAM_IGNORE;
 }

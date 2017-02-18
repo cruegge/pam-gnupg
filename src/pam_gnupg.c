@@ -194,7 +194,7 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
 FILE *open_keygrip_file(const struct userinfo *user) {
     char keygrip_file[1024];
     if (snprintf(keygrip_file, sizeof(keygrip_file),
-                 "%s/.gnupg/pam-gnupg-keygrip", user->home) >= sizeof(keygrip_file)) {
+                 "%s/.pam-gnupg", user->home) >= sizeof(keygrip_file)) {
         return FALSE;
     }
     return fopen(keygrip_file, "r");

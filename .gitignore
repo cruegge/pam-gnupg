@@ -31,3 +31,19 @@
 # Debug files
 *.dSYM/
 *.su
+
+# Autotools
+Makefile
+Makefile.in
+/configure
+/config.h*
+/config.log
+/config.status
+/aclocal.m4
+/m4
+/autom4te.cache
+/build-aux
+/libtool
+/stamp-h1
+.deps
+.libs

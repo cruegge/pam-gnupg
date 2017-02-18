@@ -13,6 +13,8 @@
 #include <security/pam_ext.h>
 #include <security/pam_modules.h>
 
+#include "config.h"
+
 #define KEYGRIP_LENGTH 40
 
 #define READ_END 0
@@ -217,7 +219,7 @@ int extract_keygrip(const char *line, char *keygrip) {
 int connect_agent(const struct userinfo *user) {
     int pid, status;
     const char * const cmd[] =
-        {"/usr/bin/gpg-connect-agent", "/bye", NULL};
+        {GPG_CONNECT_AGENT, "/bye", NULL};
     pid = run_as_user(user, cmd, NULL);
     if (pid == 0) {
         return FALSE;
@@ -229,7 +231,7 @@ int connect_agent(const struct userinfo *user) {
 int preset_passphrase(const struct userinfo *user, const char *keygrip, const char *tok) {
     int pid, status, input;
     const char * const cmd[] =
-        {"/usr/lib/gnupg/gpg-preset-passphrase", "--preset", keygrip, NULL};
+        {GPG_PRESET_PASSPHRASE, "--preset", keygrip, NULL};
     pid = run_as_user(user, cmd, &input);
     if (pid == 0 || input < 0) {
         return 0;

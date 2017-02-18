@@ -97,8 +97,9 @@ void cleanup_token(pam_handle_t *pamh, void *data, int error_status) {
     memset(data, 0xBB, len);
     /* Defeats others */
     vp = (volatile char*) data;
-    while (*vp)
+    while (*vp) {
         *(vp++) = 0xAA;
+    }
     free((void *) data);
 }
 
@@ -111,15 +112,12 @@ void close_safe(int fd)
 
 void setup_sigs(struct sigaction *old) {
     struct sigaction sigchld, sigpipe;
-
     memset(&sigchld, 0, sizeof(sigchld));
     memset(&sigpipe, 0, sizeof(sigpipe));
     memset(&old[0], 0, sizeof(old[0]));
     memset(&old[1], 0, sizeof(old[1]));
-
     sigchld.sa_handler = SIG_DFL;
     sigpipe.sa_handler = SIG_IGN;
-
     sigaction(SIGCHLD, &sigchld, &old[0]);
     sigaction(SIGPIPE, &sigpipe, &old[1]);
 }
@@ -182,7 +180,6 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
 
     seteuid(getuid());
     setegid(getgid());
-
     if (setgid(user->gid) < 0 || setuid(user->uid) < 0 ||
         setegid(user->gid) < 0 || seteuid(user->uid) < 0) {
         exit(EXIT_FAILURE);
@@ -216,7 +213,6 @@ int connect_agent(const struct userinfo *user) {
     int pid, status;
     const char * const cmd[] =
         {"/usr/bin/gpg-connect-agent", "/bye", NULL};
-
     pid = run_as_user(user, cmd, NULL);
     if (pid == 0) {
         return FALSE;
@@ -227,10 +223,8 @@ int connect_agent(const struct userinfo *user) {
 
 int preset_passphrase(const struct userinfo *user, const char *keygrip, const char *tok) {
     int pid, status, input;
-
     const char * const cmd[] =
         {"/usr/lib/gnupg/gpg-preset-passphrase", "--preset", keygrip, NULL};
-
     pid = run_as_user(user, cmd, &input);
     if (pid == 0 || input < 0) {
         return 0;
@@ -238,7 +232,6 @@ int preset_passphrase(const struct userinfo *user, const char *keygrip, const ch
     write(input, tok, strlen(tok));
     close(input);
     waitpid(pid, &status, 0);
-
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 

@@ -27,8 +27,8 @@ if test x"$GPGCONF" = x:; then
     AC_MSG_ERROR([gpgconf not found])
 fi
 
-AC_MSG_CHECKING([whether GnuPG version is >= ${GPG_MIN_VERSION}])
 GPG_MIN_VERSION="2.1"
+AC_MSG_CHECKING([whether GnuPG version is >= ${GPG_MIN_VERSION}])
 GPG=$("$GPGCONF" --list-components | "$AWK" -F: '$1=="gpg" {print $3}')
 GPG_VERSION=$("$GPG" --version | "$AWK" 'NR==1 {print $NF}')
 AS_VERSION_COMPARE(${GPG_VERSION}, ${GPG_MIN_VERSION}, [gpg_too_old="yes"])

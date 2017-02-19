@@ -26,7 +26,6 @@ AC_CHECK_PROGS([GPGCONF], [gpgconf], [:])
 if test x"$GPGCONF" = x:; then
     AC_MSG_ERROR([gpgconf not found])
 fi
-AC_DEFINE_UNQUOTED([GPGCONF], "$GPGCONF", [path to gpgconf])
 
 AC_MSG_CHECKING([whether GnuPG version is >= ${GPG_MIN_VERSION}])
 GPG_MIN_VERSION="2.1"
@@ -39,6 +38,14 @@ if test x"$gpg_too_old" = xyes; then
 else
     AC_MSG_RESULT([yes])
 fi
+
+AC_PATH_PROG(GPG_CONNECT_AGENT, [gpg-connect-agent], [:],
+             [$("$GPGCONF" --list-dirs bindir)])
+if test x"$GPG_CONNECT_AGENT" = x:; then
+    AC_MSG_ERROR([gpg-connect-agent not found])
+fi
+AC_DEFINE_UNQUOTED([GPG_CONNECT_AGENT], "$GPG_CONNECT_AGENT",
+                   [path to gpg-connect-agent])
 
 AC_PATH_PROG(GPG_PRESET_PASSPHRASE, [gpg-preset-passphrase], [:],
              [$("$GPGCONF" --list-dirs libexecdir)])

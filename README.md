@@ -15,16 +15,15 @@ of course welcome).
 
 The code was written mainly by looking at and occasionally copying from Gnome
 Keyring's PAM module and pam_mount and is based on a somehwat mediocre
-understanding of the details of both PAM and C. Since it's a security related
-module, you should be aware that there may be potentially dangerous bugs
-lurking.
+understanding of the details of both PAM and C. Since this is security related,
+you should be aware that there may be potentially dangerous bugs lurking.
 
 ## Installation
 
 The ususal
 
-    autogen.sh
-    configure
+    ./autogen.sh
+    ./configure
     make
     make install
 
@@ -40,7 +39,7 @@ a different path.
 
 The module implements PAM's `auth` and `session` functions. The `auth` part
 stores the passphrase and tries to send it to `gpg-agent`. If that fails, e.g.
-due to `gpg-agent` not runnign, the `session` part starts the agent and sends
+due to `gpg-agent` not running, the `session` part starts the agent and sends
 the passphrase again.
 
 How to include the module in PAM's config depends on your distribution. On Arch,

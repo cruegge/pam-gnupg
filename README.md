@@ -33,6 +33,8 @@ should work.
 the PAM module. It defaults to `/lib/security`, but your distribution might use
 a different path.
 
+For Arch users, theres an [AUR package](https://aur.archlinux.org/packages/pam-gnupg-git/).
+
 ## Usage
 
 ### PAM setup

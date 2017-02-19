@@ -222,10 +222,10 @@ int extract_keygrip(const char *line, char *keygrip) {
     return TRUE;
 }
 
-int connect_agent(const struct userinfo *user) {
+int start_agent(const struct userinfo *user) {
     int pid, status;
     const char * const cmd[] =
-        {GPG_CONNECT_AGENT, "/bye", NULL};
+        {GPGCONF, "--launch", "gpg-agent", NULL};
     pid = run_as_user(user, cmd, NULL);
     if (pid == 0) {
         return FALSE;
@@ -343,7 +343,7 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
         goto end;
     }
 
-    if (!connect_agent(user)) {
+    if (!start_agent(user)) {
         ret = PAM_SESSION_ERR;
         goto end;
     }

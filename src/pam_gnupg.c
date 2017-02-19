@@ -186,9 +186,8 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
         close(dev_null);
     }
 
-    seteuid(getuid());
-    setegid(getgid());
-    if (setgid(user->gid) < 0 || setuid(user->uid) < 0 ||
+    if (seteuid(getuid()) < 0 || setegid(getgid()) < 0 ||
+        setgid(user->gid) < 0 || setuid(user->uid) < 0 ||
         setegid(user->gid) < 0 || seteuid(user->uid) < 0) {
         exit(EXIT_FAILURE);
     }
@@ -242,7 +241,9 @@ int preset_passphrase(const struct userinfo *user, const char *keygrip, const ch
     if (pid == 0 || input < 0) {
         return 0;
     }
-    write(input, tok, strlen(tok));
+    if (write(input, tok, strlen(tok)) < 0) {
+        kill(pid, SIGTERM);
+    }
     close(input);
     waitpid(pid, &status, 0);
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;

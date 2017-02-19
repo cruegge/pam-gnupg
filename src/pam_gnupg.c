@@ -112,21 +112,27 @@ void close_safe(int fd)
     }
 }
 
-void setup_sigs(struct sigaction *old) {
+void setup_sigs(struct sigaction **old) {
     struct sigaction sigchld, sigpipe;
+    if ((*old = malloc(2*sizeof(struct sigaction))) == NULL) {
+        return;
+    }
+    memset(*old, 0, 2*sizeof(struct sigaction));
     memset(&sigchld, 0, sizeof(sigchld));
     memset(&sigpipe, 0, sizeof(sigpipe));
-    memset(&old[0], 0, sizeof(old[0]));
-    memset(&old[1], 0, sizeof(old[1]));
     sigchld.sa_handler = SIG_DFL;
     sigpipe.sa_handler = SIG_IGN;
-    sigaction(SIGCHLD, &sigchld, &old[0]);
-    sigaction(SIGPIPE, &sigpipe, &old[1]);
+    sigaction(SIGCHLD, &sigchld, *old+0);
+    sigaction(SIGPIPE, &sigpipe, *old+1);
 }
 
-void restore_sigs(struct sigaction *old) {
-    sigaction(SIGCHLD, &old[0], NULL);
-    sigaction(SIGPIPE, &old[1], NULL);
+void restore_sigs(const struct sigaction *old) {
+    if (old == NULL) {
+        return;
+    }
+    sigaction(SIGCHLD, old+0, NULL);
+    sigaction(SIGPIPE, old+1, NULL);
+    free((void *) old);
 }
 
 int run_as_user(const struct userinfo *user, const char * const cmd[], int *input) {
@@ -243,27 +249,44 @@ int preset_passphrase(const struct userinfo *user, const char *keygrip, const ch
 }
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
+    const char *tok;
+    if (pam_get_item(pamh, PAM_AUTHTOK, (const void **) &tok) == PAM_SUCCESS || tok != NULL) {
+        pam_set_data(pamh, "pam-gnupg-token", (void *) strdup(tok), cleanup_token);
+    }
+    return PAM_SUCCESS;
+}
+
+int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     char keygrip[KEYGRIP_LENGTH+1];
     const char *tok;
     struct userinfo *user;
-    struct sigaction handlers[2];
+    struct sigaction *handlers = NULL;
     FILE *file = NULL;
     char *line = NULL;
     size_t len = 0;
+    int ret = PAM_SUCCESS;
+
+    if (flags & PAM_DELETE_CRED) {
+        return PAM_SUCCESS;
+    }
+
+    if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS) {
+        return PAM_SUCCESS;
+    }
 
     if (!get_userinfo(pamh, &user)) {
-        goto end;
+        return PAM_USER_UNKNOWN;
     }
 
     if ((file = open_keygrip_file(user)) == NULL) {
         goto end;
     }
 
-    if (pam_get_item(pamh, PAM_AUTHTOK, (const void **) &tok) != PAM_SUCCESS || tok == NULL) {
+    setup_sigs(&handlers);
+    if (handlers == NULL) {
+        ret = PAM_SYSTEM_ERR;
         goto end;
     }
-
-    setup_sigs(handlers);
 
     while (getline(&line, &len, file) != -1) {
         if (!extract_keygrip(line, keygrip)) {
@@ -271,13 +294,13 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
         }
         if (!preset_passphrase(user, keygrip, tok)) {
             /* We did not succeed setting the passphrase. Maybe the agent is not
-             * running? Store token and try again in open_session. */
-            pam_set_data(pamh, "pam-gnupg-token", (void *) strdup(tok), cleanup_token);
-            break;
+             * running? Try again in open_session. */
+            ret = PAM_CRED_UNAVAIL;
+            goto end;
         }
     }
 
-    restore_sigs(handlers);
+    pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);
 
 end:
     if (file != NULL) {
@@ -286,28 +309,27 @@ end:
     if (line != NULL) {
         free(line);
     }
+    restore_sigs(handlers);
     free_userinfo(user);
-    return PAM_IGNORE;
-}
-
-int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    return PAM_IGNORE;
+    return ret;
 }
 
 int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     char keygrip[KEYGRIP_LENGTH+1];
     const char *tok;
     struct userinfo *user;
-    struct sigaction handlers[2];
+    struct sigaction *handlers;
     FILE *file = NULL;
     char *line = NULL;
     size_t len = 0;
+    int ret = PAM_SUCCESS;
 
     if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS) {
-        return PAM_IGNORE;
+        return PAM_SUCCESS;
     }
 
     if (!get_userinfo(pamh, &user)) {
+        ret = PAM_SESSION_ERR;
         goto end;
     }
 
@@ -315,10 +337,14 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
         goto end;
     }
 
-    setup_sigs(handlers);
+    setup_sigs(&handlers);
+    if (handlers == NULL) {
+        ret = PAM_SYSTEM_ERR;
+        goto end;
+    }
 
     if (!connect_agent(user)) {
-        restore_sigs(handlers);
+        ret = PAM_SESSION_ERR;
         goto end;
     }
 
@@ -329,8 +355,6 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
         preset_passphrase(user, keygrip, tok);
     }
 
-    restore_sigs(handlers);
-
 end:
     pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);
     if (file != NULL) {
@@ -339,10 +363,11 @@ end:
     if (line != NULL) {
         free(line);
     }
+    restore_sigs(handlers);
     free_userinfo(user);
-    return PAM_IGNORE;
+    return ret;
 }
 
 int pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    return PAM_IGNORE;
+    return PAM_SUCCESS;
 }

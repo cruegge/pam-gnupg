@@ -270,7 +270,7 @@ int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
         return PAM_SUCCESS;
     }
 
-    if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS) {
+    if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS || tok == NULL) {
         return PAM_SUCCESS;
     }
 
@@ -324,7 +324,7 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
     size_t len = 0;
     int ret = PAM_SUCCESS;
 
-    if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS) {
+    if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS || tok == NULL) {
         return PAM_SUCCESS;
     }
 

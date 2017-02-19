@@ -39,9 +39,9 @@ void free_userinfo(struct userinfo *userinfo) {
 }
 
 int get_userinfo(pam_handle_t *pamh, struct userinfo **userinfo) {
-    const char *user;
-    struct passwd pwd, *result;
-    char *buf;
+    const char *user = NULL;
+    struct passwd pwd, *result = NULL;
+    char *buf = NULL;
     size_t bufsize;
 
     *userinfo = NULL;
@@ -250,7 +250,7 @@ int preset_passphrase(const struct userinfo *user, const char *keygrip, const ch
 }
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    const char *tok;
+    const char *tok = NULL;
     if (pam_get_item(pamh, PAM_AUTHTOK, (const void **) &tok) == PAM_SUCCESS || tok != NULL) {
         pam_set_data(pamh, "pam-gnupg-token", (void *) strdup(tok), cleanup_token);
     }
@@ -259,8 +259,8 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
 
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     char keygrip[KEYGRIP_LENGTH+1];
-    const char *tok;
-    struct userinfo *user;
+    const char *tok = NULL;
+    struct userinfo *user = NULL;
     struct sigaction *handlers = NULL;
     FILE *file = NULL;
     char *line = NULL;
@@ -317,9 +317,9 @@ end:
 
 int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     char keygrip[KEYGRIP_LENGTH+1];
-    const char *tok;
-    struct userinfo *user;
-    struct sigaction *handlers;
+    const char *tok = NULL;
+    struct userinfo *user = NULL;
+    struct sigaction *handlers = NULL;
     FILE *file = NULL;
     char *line = NULL;
     size_t len = 0;

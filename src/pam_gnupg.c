@@ -275,7 +275,7 @@ int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     }
 
     if (!get_userinfo(pamh, &user)) {
-        return PAM_USER_UNKNOWN;
+        return PAM_IGNORE;
     }
 
     if ((file = open_keygrip_file(user)) == NULL) {
@@ -284,7 +284,7 @@ int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
 
     setup_sigs(&handlers);
     if (handlers == NULL) {
-        ret = PAM_SYSTEM_ERR;
+        ret = PAM_IGNORE;
         goto end;
     }
 
@@ -295,7 +295,7 @@ int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
         if (!preset_passphrase(user, keygrip, tok)) {
             /* We did not succeed setting the passphrase. Maybe the agent is not
              * running? Try again in open_session. */
-            ret = PAM_CRED_UNAVAIL;
+            ret = PAM_IGNORE;
             goto end;
         }
     }
@@ -329,7 +329,7 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
     }
 
     if (!get_userinfo(pamh, &user)) {
-        ret = PAM_SESSION_ERR;
+        ret = PAM_IGNORE;
         goto end;
     }
 
@@ -339,12 +339,12 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
 
     setup_sigs(&handlers);
     if (handlers == NULL) {
-        ret = PAM_SYSTEM_ERR;
+        ret = PAM_IGNORE;
         goto end;
     }
 
     if (!start_agent(user)) {
-        ret = PAM_SESSION_ERR;
+        ret = PAM_IGNORE;
         goto end;
     }
 

@@ -77,7 +77,7 @@ after the keygrip.
 
 To show the keygrips of your private keys, use
 
-    gpg -K --with-keygrips
+    gpg -K --with-keygrip
 
 Make sure to pick the keygrip of the proper subkey you want to unlock. For usage
 with `pass`, that will be the encryption key.

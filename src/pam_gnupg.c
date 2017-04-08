@@ -215,12 +215,14 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
 }
 
 FILE *open_keygrip_file(const struct userinfo *user) {
-    char keygrip_file[1024];
-    if (snprintf(keygrip_file, sizeof(keygrip_file),
-                 "%s/.pam-gnupg", user->home) >= sizeof(keygrip_file)) {
+    FILE *f;
+    char *keygrip_file;
+    if (asprintf(&keygrip_file, "%s/.pam-gnupg", user->home) < 0) {
         return NULL;
     }
-    return fopen(keygrip_file, "r");
+    f = fopen(keygrip_file, "r");
+    free(keygrip_file);
+    return f;
 }
 
 int extract_keygrip(const char *line, char *keygrip) {

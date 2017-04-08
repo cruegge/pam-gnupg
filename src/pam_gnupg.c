@@ -246,23 +246,18 @@ int extract_keygrip(const char *line, char *keygrip) {
     return TRUE;
 }
 
-int connect_agent(const struct userinfo *user) {
-    int pid, status;
-    const char * const cmd[] =
-        {GPG_CONNECT_AGENT, "/bye", NULL};
-    pid = run_as_user(user, cmd, NULL);
-    if (pid == 0) {
-        return FALSE;
-    }
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-}
-
-int preset_passphrase(const struct userinfo *user, const char *keygrip, const char *tok) {
+int preset_passphrase(const struct userinfo *user, const char *keygrip, const char *tok, int autostart) {
     int pid, status, input;
     char *line = NULL;
-    const char * const cmd[] =
-        {GPG_CONNECT_AGENT, NULL};
+    /* gpg-connect-agent has an option --no-autostart, which *should* return
+     * non-zero when the agent is not running. Unfortunately, the exit code is
+     * always 0 in version 2.1. Passing an invalid agent program here is a
+     * workaround. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=797334 */
+    const char *cmd[] =
+        {GPG_CONNECT_AGENT, "--agent-program", "/dev/null", NULL};
+    if (autostart) {
+        cmd[1] = NULL;
+    }
     pid = run_as_user(user, cmd, &input);
     if (pid == 0 || input < 0) {
         return 0;
@@ -327,9 +322,10 @@ int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
         if (!extract_keygrip(line, keygrip)) {
             continue;
         }
-        if (!preset_passphrase(user, keygrip, tok)) {
+        if (!preset_passphrase(user, keygrip, tok, FALSE)) {
             /* We did not succeed setting the passphrase. Maybe the agent is not
              * running? Try again in open_session. */
+            printf("setcred failed\n");
             ret = PAM_IGNORE;
             goto end;
         }
@@ -378,16 +374,11 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
         goto end;
     }
 
-    if (!connect_agent(user)) {
-        ret = PAM_IGNORE;
-        goto end;
-    }
-
     while (getline(&line, &len, file) != -1) {
         if (!extract_keygrip(line, keygrip)) {
             continue;
         }
-        preset_passphrase(user, keygrip, tok);
+        preset_passphrase(user, keygrip, tok, TRUE);
     }
 
 end:

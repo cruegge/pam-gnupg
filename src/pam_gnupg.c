@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <fcntl.h>
 #include <pwd.h>
 #include <stdio.h>
@@ -105,7 +106,7 @@ char *hexify(const char *token) {
 }
 
 /* Copied from gnome-keyring */
-void cleanup_token(pam_handle_t *pamh, void *data, int error_status) {
+void wipestr(char *data) {
     volatile char *vp;
     size_t len;
     if (!data) {
@@ -121,6 +122,10 @@ void cleanup_token(pam_handle_t *pamh, void *data, int error_status) {
         *(vp++) = 0xAA;
     }
     free((void *) data);
+}
+
+void cleanup_token(pam_handle_t *pamh, void *data, int error_status) {
+    wipestr(data);
 }
 
 void close_safe(int fd)
@@ -255,15 +260,21 @@ int connect_agent(const struct userinfo *user) {
 
 int preset_passphrase(const struct userinfo *user, const char *keygrip, const char *tok) {
     int pid, status, input;
+    char *line = NULL;
     const char * const cmd[] =
-        {GPG_PRESET_PASSPHRASE, "--preset", keygrip, NULL};
+        {GPG_CONNECT_AGENT, NULL};
     pid = run_as_user(user, cmd, &input);
     if (pid == 0 || input < 0) {
         return 0;
     }
-    if (write(input, tok, strlen(tok)) < 0) {
+    if (asprintf(&line, "PRESET_PASSPHRASE %s -1 %s\n", keygrip, tok) < 0) {
+        goto end;
+    }
+    if (write(input, line, strlen(line)) < 0) {
         kill(pid, SIGTERM);
     }
+    wipestr(line);
+end:
     close(input);
     waitpid(pid, &status, 0);
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;

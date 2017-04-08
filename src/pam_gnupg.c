@@ -219,60 +219,89 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
     exit(EXIT_FAILURE);
 }
 
-FILE *open_keygrip_file(const struct userinfo *user) {
-    FILE *f;
+int preset_passphrase(pam_handle_t *pamh, const char *tok, int autostart) {
+    int ret = FALSE;
+
+    struct userinfo *user;
+    if (!get_userinfo(pamh, &user)) {
+        return FALSE;
+    }
+
     char *keygrip_file;
     if (asprintf(&keygrip_file, "%s/.pam-gnupg", user->home) < 0) {
-        return NULL;
+        goto end;
     }
-    f = fopen(keygrip_file, "r");
+    FILE *file = fopen(keygrip_file, "r");
     free(keygrip_file);
-    return f;
-}
 
-int extract_keygrip(const char *line, char *keygrip) {
-    const char *cur = line;
-    while (*cur && strchr(" \t\n\r\f\v", *cur)) {
-        cur++;
+    struct sigaction *handlers = NULL;
+    setup_sigs(&handlers);
+    if (handlers == NULL) {
+        goto end;
     }
-    if (!*cur || *cur == '#') {
-        return FALSE;
-    }
-    strncpy(keygrip, cur, KEYGRIP_LENGTH);
-    keygrip[KEYGRIP_LENGTH] = 0;
-    if (strlen(keygrip) != KEYGRIP_LENGTH) {
-        return FALSE;
-    }
-    return TRUE;
-}
 
-int preset_passphrase(const struct userinfo *user, const char *keygrip, const char *tok, int autostart) {
-    int pid, status, input;
-    char *line = NULL;
     /* gpg-connect-agent has an option --no-autostart, which *should* return
      * non-zero when the agent is not running. Unfortunately, the exit code is
      * always 0 in version 2.1. Passing an invalid agent program here is a
      * workaround. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=797334 */
-    const char *cmd[] =
-        {GPG_CONNECT_AGENT, "--agent-program", "/dev/null", NULL};
+    const char *cmd[] = {GPG_CONNECT_AGENT, "--agent-program", "/dev/null", NULL};
     if (autostart) {
         cmd[1] = NULL;
     }
-    pid = run_as_user(user, cmd, &input);
+
+    int input;
+    const int pid = run_as_user(user, cmd, &input);
     if (pid == 0 || input < 0) {
-        return 0;
-    }
-    if (asprintf(&line, "PRESET_PASSPHRASE %s -1 %s\n", keygrip, tok) < 0) {
         goto end;
     }
-    if (write(input, line, strlen(line)) < 0) {
-        kill(pid, SIGTERM);
+
+    char *presetcmd;
+    const int presetlen = asprintf(&presetcmd, "PRESET_PASSPHRASE xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -1 %s\n", tok);
+    if (presetlen < 0) {
+        presetcmd = NULL;
+        goto end;
     }
-    wipestr(line);
-end:
+    char * const keygrip = presetcmd + 18;
+
+    char *line = NULL;
+    size_t len = 0;
+    while (getline(&line, &len, file) != -1) {
+        const char *cur = line;
+        while (*cur && strchr(" \t\n\r\f\v", *cur)) {
+            cur++;
+        }
+        if (!*cur || *cur == '#') {
+            continue;
+        }
+        strncpy(keygrip, cur, KEYGRIP_LENGTH);
+        if (strlen(keygrip) < KEYGRIP_LENGTH) {
+            /* We hit eol sooner than expected. */
+            continue;
+        }
+        if (write(input, presetcmd, presetlen) < 0) {
+            /* If anything goes wrong, we just stop here. No attempt is made to
+             * clean passphrases that were set in a previous iteration. */
+            close(input);
+            goto end;
+        }
+    }
+
+    int status;
     close(input);
     waitpid(pid, &status, 0);
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    ret = (WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+end:
+    wipestr(presetcmd);
+    restore_sigs(handlers);
+    free_userinfo(user);
+    if (file != NULL) {
+        fclose(file);
+    }
+    if (line != NULL) {
+        free(line);
+    }
+    return ret;
 }
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
@@ -287,111 +316,24 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
 }
 
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    char keygrip[KEYGRIP_LENGTH+1];
     const char *tok = NULL;
-    struct userinfo *user = NULL;
-    struct sigaction *handlers = NULL;
-    FILE *file = NULL;
-    char *line = NULL;
-    size_t len = 0;
-    int ret = PAM_SUCCESS;
-
-    if (flags & PAM_DELETE_CRED) {
+    if ((flags & PAM_DELETE_CRED) || pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS || tok == NULL) {
         return PAM_SUCCESS;
     }
-
-    if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS || tok == NULL) {
-        return PAM_SUCCESS;
-    }
-
-    if (!get_userinfo(pamh, &user)) {
+    if (!preset_passphrase(pamh, tok, FALSE)) {
         return PAM_IGNORE;
     }
-
-    if ((file = open_keygrip_file(user)) == NULL) {
-        goto end;
-    }
-
-    setup_sigs(&handlers);
-    if (handlers == NULL) {
-        ret = PAM_IGNORE;
-        goto end;
-    }
-
-    while (getline(&line, &len, file) != -1) {
-        if (!extract_keygrip(line, keygrip)) {
-            continue;
-        }
-        if (!preset_passphrase(user, keygrip, tok, FALSE)) {
-            /* We did not succeed setting the passphrase. Maybe the agent is not
-             * running? Try again in open_session. */
-            printf("setcred failed\n");
-            ret = PAM_IGNORE;
-            goto end;
-        }
-    }
-
     pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);
-
-end:
-    if (file != NULL) {
-        fclose(file);
-    }
-    if (line != NULL) {
-        free(line);
-    }
-    restore_sigs(handlers);
-    free_userinfo(user);
-    return ret;
+    return PAM_SUCCESS;
 }
 
 int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    char keygrip[KEYGRIP_LENGTH+1];
     const char *tok = NULL;
-    struct userinfo *user = NULL;
-    struct sigaction *handlers = NULL;
-    FILE *file = NULL;
-    char *line = NULL;
-    size_t len = 0;
-    int ret = PAM_SUCCESS;
-
-    if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS || tok == NULL) {
-        return PAM_SUCCESS;
+    if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) == PAM_SUCCESS && tok != NULL) {
+        preset_passphrase(pamh, tok, TRUE);
+        pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);
     }
-
-    if (!get_userinfo(pamh, &user)) {
-        ret = PAM_IGNORE;
-        goto end;
-    }
-
-    if ((file = open_keygrip_file(user)) == NULL) {
-        goto end;
-    }
-
-    setup_sigs(&handlers);
-    if (handlers == NULL) {
-        ret = PAM_IGNORE;
-        goto end;
-    }
-
-    while (getline(&line, &len, file) != -1) {
-        if (!extract_keygrip(line, keygrip)) {
-            continue;
-        }
-        preset_passphrase(user, keygrip, tok, TRUE);
-    }
-
-end:
-    pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);
-    if (file != NULL) {
-        fclose(file);
-    }
-    if (line != NULL) {
-        free(line);
-    }
-    restore_sigs(handlers);
-    free_userinfo(user);
-    return ret;
+    return PAM_SUCCESS;
 }
 
 int pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {

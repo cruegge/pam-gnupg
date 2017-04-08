@@ -23,6 +23,8 @@
 #define TRUE 1
 #define FALSE 0
 
+#define tohex(n) ((n) < 10 ? ((n) + '0') : (((n) - 10) + 'A'))
+
 struct userinfo {
     int uid, gid;
     char *home;
@@ -84,6 +86,22 @@ int get_userinfo(pam_handle_t *pamh, struct userinfo **userinfo) {
     }
 
     return TRUE;
+}
+
+/* Copied from gnupg */
+char *hexify(const char *token) {
+    char *result = malloc(2*strlen(token)+1);
+    char *r;
+    const char *s;
+    if (result == NULL) {
+        return NULL;
+    }
+    for (s = token, r = result; *s; s++) {
+        *r++ = tohex((*s>>4) & 15);
+        *r++ = tohex(*s & 15);
+    }
+    *r = 0;
+    return result;
 }
 
 /* Copied from gnome-keyring */
@@ -251,8 +269,11 @@ int preset_passphrase(const struct userinfo *user, const char *keygrip, const ch
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tok = NULL;
-    if (pam_get_item(pamh, PAM_AUTHTOK, (const void **) &tok) == PAM_SUCCESS || tok != NULL) {
-        pam_set_data(pamh, "pam-gnupg-token", (void *) strdup(tok), cleanup_token);
+    if (pam_get_item(pamh, PAM_AUTHTOK, (const void **) &tok) == PAM_SUCCESS && tok != NULL) {
+        tok = hexify(tok);
+        if (tok != NULL) {
+            pam_set_data(pamh, "pam-gnupg-token", (void *) tok, cleanup_token);
+        }
     }
     return PAM_SUCCESS;
 }

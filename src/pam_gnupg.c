@@ -306,7 +306,10 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
 
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tok = NULL;
-    if ((flags & PAM_DELETE_CRED) || pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS || tok == NULL) {
+    if ((argc > 0 && strcmp(argv[0], "store-only") == 0) ||
+        (flags & PAM_DELETE_CRED) ||
+        pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS ||
+        tok == NULL) {
         return PAM_SUCCESS;
     }
     if (!preset_passphrase(pamh, tok, FALSE)) {
@@ -319,7 +322,7 @@ int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
 int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tok = NULL;
     if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) == PAM_SUCCESS && tok != NULL) {
-        preset_passphrase(pamh, tok, TRUE);
+        preset_passphrase(pamh, tok, (argc == 0 || strcmp(argv[0], "no-autostart") != 0));
         pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);
     }
     return PAM_SUCCESS;

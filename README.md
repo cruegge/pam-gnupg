@@ -71,6 +71,17 @@ user service, make sure the `session` line in your PAM config comes after the
 `session` line for `pam_systemd.so`. This way, `gpg-agent` will already be
 running as a user service by the time `pam_gnupg.so` is called.
 
+#### Options
+
+The `auth` part takes an optional paramter `store-only`. If present, it prevents
+the module from trying to preset the passphrase right away, and just stores it
+to be used by the `session` part.
+
+The `session` part takes an optional parameter `no-autostart`. If present, it
+prevents the module from starting the agent at all. This is useful in
+combination with systemd, if you want to make sure that the agent is not started
+by `pam_gnupg` if systemd fails to do so for some reason.
+
 ### GnuPG setup
 
 Presetting passphrases needs to be enabled by adding

@@ -200,7 +200,7 @@ FILE *open_keygrip_file(const struct userinfo *user) {
     char keygrip_file[1024];
     if (snprintf(keygrip_file, sizeof(keygrip_file),
                  "%s/.pam-gnupg", user->home) >= sizeof(keygrip_file)) {
-        return FALSE;
+        return NULL;
     }
     return fopen(keygrip_file, "r");
 }

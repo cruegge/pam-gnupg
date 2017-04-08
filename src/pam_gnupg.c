@@ -163,21 +163,17 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
     int pid;
     int dev_null;
 
-    if (input != NULL) {
-        if (pipe(inp) < 0) {
-            *input = -1;
-            return 0;
-        }
-        *input = inp[WRITE_END];
+    if (pipe(inp) < 0) {
+        *input = -1;
+        return 0;
     }
+    *input = inp[WRITE_END];
 
     switch (pid = fork()) {
     case -1:
         close_safe(inp[READ_END]);
         close_safe(inp[WRITE_END]);
-        if (input != NULL) {
-            *input = -1;
-        }
+        *input = -1;
         return FALSE;
 
     case 0:
@@ -190,15 +186,8 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
 
     /* We're in the child process now */
 
-    if (inp[READ_END] != -1) {
-        if (dup2(inp[READ_END], STDIN_FILENO) < 0) {
-            exit(EXIT_FAILURE);
-        }
-    } else {
-        if ((dev_null = open("/dev/null", O_RDONLY)) != -1) {
-            dup2(dev_null, STDIN_FILENO);
-            close(dev_null);
-        }
+    if (dup2(inp[READ_END], STDIN_FILENO) < 0) {
+        exit(EXIT_FAILURE);
     }
     close_safe(inp[READ_END]);
     close_safe(inp[WRITE_END]);

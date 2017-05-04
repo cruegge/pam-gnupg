@@ -222,6 +222,9 @@ int preset_passphrase(pam_handle_t *pamh, const char *tok, int autostart) {
     }
     FILE *file = fopen(keygrip_file, "r");
     free(keygrip_file);
+    if (file == NULL) {
+        return FALSE;
+    }
 
     struct sigaction *handlers = NULL;
     setup_sigs(&handlers);

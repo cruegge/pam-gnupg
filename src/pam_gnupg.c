@@ -158,7 +158,7 @@ void restore_sigs(const struct sigaction *old) {
     free((void *) old);
 }
 
-int run_as_user(const struct userinfo *user, const char * const cmd[], int *input) {
+int run_as_user(const struct userinfo *user, const char * const cmd[], int *input, char **env) {
     int inp[2] = {-1, -1};
     int pid;
     int dev_null;
@@ -204,7 +204,11 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
         exit(EXIT_FAILURE);
     }
 
-    execv(cmd[0], (char * const *) cmd);
+    if (env != NULL) {
+        execve(cmd[0], (char * const *) cmd, env);
+    } else {
+        execv(cmd[0], (char * const *) cmd);
+    }
     exit(EXIT_FAILURE);
 }
 
@@ -242,7 +246,11 @@ int preset_passphrase(pam_handle_t *pamh, const char *tok, int autostart) {
     }
 
     int input;
-    const int pid = run_as_user(user, cmd, &input);
+    char **env = pam_getenvlist(pamh);
+    const int pid = run_as_user(user, cmd, &input, env);
+    if (env != NULL) {
+        free(env);
+    }
     if (pid == 0 || input < 0) {
         goto end;
     }

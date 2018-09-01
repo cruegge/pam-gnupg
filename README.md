@@ -122,6 +122,18 @@ the authentication subkey `[A]` can also be useful in case you have one.
 Obviously, the respective keys need to have the same passphrase as your user
 account.
 
+### Environment and moving `~/.gnupg`
+
+When calling `gpg-connect-agent` to set the passphrase, the pam-provided
+environment is used. So if you want to move your `.gnupg` to a non-standard
+location and set `$GNUPGHOME` accordingly, you can do so using `pam_env(8)` by
+adding
+
+    GNUPGHOME DEFAULT=@{HOME}/path/to/your/gnupg
+
+to `~/.pam_environment`. Just make sure that `pam_env.so` is run before
+`pam_gnupg.so`.
+
 
 [pass]: https://www.passwordstore.org/
 [AUR package]: https://aur.archlinux.org/packages/pam-gnupg-git/

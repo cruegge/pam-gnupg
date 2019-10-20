@@ -1,3 +1,12 @@
+---
+name: Feature request
+about: Suggest features, propose improvements, discuss new ideas.
+title: "[FEATURE]"
+labels: enhancement
+assignees: ''
+
+---
+
 <!--- Provide a general summary of the issue in the Title above -->
 
 ## Detailed Description

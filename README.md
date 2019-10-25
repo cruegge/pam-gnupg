@@ -4,9 +4,8 @@ Unlock GnuPG keys on login
 
 ## What is it?
 
-A PAM module that hands over your login password to `gpg-preset-passphrase`.
-This can be e.g. useful if you are using a GnuPG-based password manager,
-e.g. [pass][].
+A PAM module that hands over your login password to `gpg-agent`. This can be
+e.g. useful if you are using a GnuPG-based password manager, e.g. [pass][].
 
 Requires GnuPG 2.1, and probably only works on Linux.
 
@@ -89,8 +88,11 @@ Presetting passphrases needs to be enabled by adding
     allow-preset-passphrase
 
 to `~/.gnupg/gpg-agent.conf`. Moreover, preset passphrases do not expire after
-`default-cache-ttl` but after `max-cache-ttl`, so you may want to tweak that for
-your use case.
+`default-cache-ttl` but after `max-cache-ttl`, so you may want to add a line like
+
+    max-cache-ttl 86400
+
+to have it expire after a day.
 
 ### Key selection
 

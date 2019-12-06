@@ -32,13 +32,12 @@ struct userinfo {
 };
 
 void free_userinfo(struct userinfo *userinfo) {
-    if (userinfo == NULL) {
+
+    if (!userinfo)
         return;
-    }
-    if (userinfo->home != NULL) {
-        free((void *) userinfo->home);
-    }
-    free((void *) userinfo);
+
+    free(userinfo->home);
+    free(userinfo);
 }
 
 int get_userinfo(pam_handle_t *pamh, struct userinfo **userinfo) {

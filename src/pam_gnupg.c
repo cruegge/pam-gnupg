@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
+
 #include <fcntl.h>
 #include <pwd.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,9 +23,6 @@
 #define READ_END 0
 #define WRITE_END 1
 
-#define TRUE 1
-#define FALSE 0
-
 #define tohex(n) ((n) < 10 ? ((n) + '0') : (((n) - 10) + 'A'))
 
 struct userinfo {
@@ -40,7 +39,7 @@ void free_userinfo(struct userinfo *userinfo) {
     free(userinfo);
 }
 
-int get_userinfo(pam_handle_t *pamh, struct userinfo **userinfo) {
+bool get_userinfo(pam_handle_t *pamh, struct userinfo **userinfo) {
     const char *user = NULL;
     struct passwd pwd, *result = NULL;
     char *buf = NULL;
@@ -49,7 +48,7 @@ int get_userinfo(pam_handle_t *pamh, struct userinfo **userinfo) {
     *userinfo = NULL;
 
     if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || user == NULL) {
-        return FALSE;
+        return false;
     }
 
     bufsize = sysconf(_SC_GETPW_R_SIZE_MAX);
@@ -59,19 +58,19 @@ int get_userinfo(pam_handle_t *pamh, struct userinfo **userinfo) {
 
     buf = malloc(bufsize);
     if (buf == NULL) {
-        return FALSE;
+        return false;
     }
 
     if (getpwnam_r(user, &pwd, buf, bufsize, &result) != 0 || result == NULL ||
         pwd.pw_dir == NULL || pwd.pw_dir[0] != '/') {
         free(buf);
-        return FALSE;
+        return false;
     }
 
     *userinfo = malloc(sizeof(*userinfo));
     if (*userinfo == NULL) {
         free(buf);
-        return FALSE;
+        return false;
     }
 
     (*userinfo)->uid = pwd.pw_uid;
@@ -82,10 +81,10 @@ int get_userinfo(pam_handle_t *pamh, struct userinfo **userinfo) {
     if ((*userinfo)->home == NULL) {
         free_userinfo(*userinfo);
         *userinfo = NULL;
-        return FALSE;
+        return false;
     }
 
-    return TRUE;
+    return true;
 }
 
 /* Copied from gnupg */
@@ -173,7 +172,7 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
         close_safe(inp[READ_END]);
         close_safe(inp[WRITE_END]);
         *input = -1;
-        return FALSE;
+        return 0;
 
     case 0:
         break;
@@ -211,12 +210,12 @@ int run_as_user(const struct userinfo *user, const char * const cmd[], int *inpu
     exit(EXIT_FAILURE);
 }
 
-int preset_passphrase(pam_handle_t *pamh, const char *tok, int autostart) {
-    int ret = FALSE;
+bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
+    bool ret = false;
 
     struct userinfo *user;
     if (!get_userinfo(pamh, &user)) {
-        return FALSE;
+        return false;
     }
 
     char *keygrip_file;
@@ -226,7 +225,7 @@ int preset_passphrase(pam_handle_t *pamh, const char *tok, int autostart) {
     FILE *file = fopen(keygrip_file, "r");
     free(keygrip_file);
     if (file == NULL) {
-        return FALSE;
+        return false;
     }
 
     struct sigaction *handlers = NULL;
@@ -322,7 +321,7 @@ int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
         tok == NULL) {
         return PAM_SUCCESS;
     }
-    if (!preset_passphrase(pamh, tok, FALSE)) {
+    if (!preset_passphrase(pamh, tok, false)) {
         return PAM_IGNORE;
     }
     pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);

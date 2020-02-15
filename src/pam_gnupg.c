@@ -23,68 +23,12 @@
 #define READ_END 0
 #define WRITE_END 1
 
-#define tohex(n) ((n) < 10 ? ((n) + '0') : (((n) - 10) + 'A'))
-
-struct userinfo {
-    int uid, gid;
-    char *home;
-};
-
-void free_userinfo(struct userinfo *userinfo) {
-
-    if (!userinfo)
-        return;
-
-    free(userinfo->home);
-    free(userinfo);
-}
-
-bool get_userinfo(pam_handle_t *pamh, struct userinfo **userinfo) {
-    const char *user = NULL;
-    struct passwd pwd, *result = NULL;
-    char *buf = NULL;
-    size_t bufsize;
-
-    *userinfo = NULL;
-
-    if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || user == NULL) {
-        return false;
+char tohex(char n) {
+    if (n < 10) {
+        return n + '0';
+    } else {
+        return n - 10 + 'A';
     }
-
-    bufsize = sysconf(_SC_GETPW_R_SIZE_MAX);
-    if (bufsize == -1) {
-        bufsize = 16384;
-    }
-
-    buf = malloc(bufsize);
-    if (buf == NULL) {
-        return false;
-    }
-
-    if (getpwnam_r(user, &pwd, buf, bufsize, &result) != 0 || result == NULL ||
-        pwd.pw_dir == NULL || pwd.pw_dir[0] != '/') {
-        free(buf);
-        return false;
-    }
-
-    *userinfo = malloc(sizeof(*userinfo));
-    if (*userinfo == NULL) {
-        free(buf);
-        return false;
-    }
-
-    (*userinfo)->uid = pwd.pw_uid;
-    (*userinfo)->gid = pwd.pw_gid;
-    (*userinfo)->home = strdup(pwd.pw_dir);
-    free(buf);
-
-    if ((*userinfo)->home == NULL) {
-        free_userinfo(*userinfo);
-        *userinfo = NULL;
-        return false;
-    }
-
-    return true;
 }
 
 /* Copied from gnupg */
@@ -126,144 +70,111 @@ void cleanup_token(pam_handle_t *pamh, void *data, int error_status) {
     wipestr(data);
 }
 
-void close_safe(int fd)
-{
-    if (fd != -1) {
-        close(fd);
+bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
+    const char *user = NULL;
+    if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || user == NULL) {
+        return false;
     }
-}
 
-void setup_sigs(struct sigaction **old) {
-    struct sigaction sigchld, sigpipe;
-    if ((*old = malloc(2*sizeof(struct sigaction))) == NULL) {
-        return;
+    struct passwd *pwd = getpwnam(user);
+    if (pwd == NULL) {
+        return false;
     }
-    memset(*old, 0, 2*sizeof(struct sigaction));
+
+    struct sigaction sigchld, old_sigchld;
     memset(&sigchld, 0, sizeof(sigchld));
-    memset(&sigpipe, 0, sizeof(sigpipe));
+    memset(&old_sigchld, 0, sizeof(old_sigchld));
     sigchld.sa_handler = SIG_DFL;
-    sigpipe.sa_handler = SIG_IGN;
-    sigaction(SIGCHLD, &sigchld, *old+0);
-    sigaction(SIGPIPE, &sigpipe, *old+1);
-}
+    sigaction(SIGCHLD, &sigchld, &old_sigchld);
 
-void restore_sigs(const struct sigaction *old) {
-    if (old == NULL) {
-        return;
-    }
-    sigaction(SIGCHLD, old+0, NULL);
-    sigaction(SIGPIPE, old+1, NULL);
-    free((void *) old);
-}
-
-int run_as_user(const struct userinfo *user, const char * const cmd[], int *input, char **env) {
-    int inp[2] = {-1, -1};
-    int pid;
-    int dev_null;
-
-    if (pipe(inp) < 0) {
-        *input = -1;
-        return 0;
-    }
-    *input = inp[WRITE_END];
-
-    switch (pid = fork()) {
-    case -1:
-        close_safe(inp[READ_END]);
-        close_safe(inp[WRITE_END]);
-        *input = -1;
-        return 0;
-
-    case 0:
-        break;
-
-    default:
-        close_safe(inp[READ_END]);
-        return pid;
+    pid_t pid = fork();
+    if (pid == -1) {
+        sigaction(SIGCHLD, &old_sigchld, NULL);
+        return false;
+    } else if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+        sigaction(SIGCHLD, &old_sigchld, NULL);
+        return (WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS);
     }
 
-    /* We're in the child process now */
+    // We're in the child process now. From here on, the function will not return.
 
-    if (dup2(inp[READ_END], STDIN_FILENO) < 0) {
+    if (setregid(pwd->pw_gid, pwd->pw_gid) < 0 || setreuid(pwd->pw_uid, pwd->pw_uid) < 0) {
         exit(EXIT_FAILURE);
     }
-    close_safe(inp[READ_END]);
-    close_safe(inp[WRITE_END]);
 
-    if ((dev_null = open("/dev/null", O_WRONLY)) != -1) {
+    int inp[2] = {-1, -1};
+    if (pipe(inp) < 0) {
+        exit(EXIT_FAILURE);
+    }
+    signal(SIGPIPE, SIG_IGN);
+
+    int dev_null = open("/dev/null", O_RDWR);
+    if (dev_null != -1) {
+        dup2(dev_null, STDIN_FILENO);
         dup2(dev_null, STDOUT_FILENO);
         dup2(dev_null, STDERR_FILENO);
         close(dev_null);
     }
 
-    if (seteuid(getuid()) < 0 || setegid(getgid()) < 0 ||
-        setgid(user->gid) < 0 || setuid(user->uid) < 0 ||
-        setegid(user->gid) < 0 || seteuid(user->uid) < 0) {
+    int dirfd = open(pwd->pw_dir, O_RDONLY | O_CLOEXEC);
+    if (dirfd < 0) {
+        exit(EXIT_FAILURE);
+    }
+    int fd = openat(dirfd, ".pam-gnupg", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        exit(EXIT_FAILURE);
+    }
+    FILE *file = fdopen(fd, "r");
+    if (file == NULL) {
         exit(EXIT_FAILURE);
     }
 
-    if (env != NULL) {
-        execve(cmd[0], (char * const *) cmd, env);
-    } else {
-        execv(cmd[0], (char * const *) cmd);
-    }
-    exit(EXIT_FAILURE);
-}
+    pid = fork();
+    if (pid == -1) {
+        exit(EXIT_FAILURE);
+    } else if (pid == 0) {
+        // Grandchild
+        if (dup2(inp[READ_END], STDIN_FILENO) < 0) {
+            exit(EXIT_FAILURE);
+        }
+        close(inp[READ_END]);
+        close(inp[WRITE_END]);
 
-bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
-    bool ret = false;
+        // gpg-connect-agent has an option --no-autostart, which *should* return
+        // non-zero when the agent is not running. Unfortunately, the exit code is
+        // always 0 in version 2.1. Passing an invalid agent program here is a
+        // workaround. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=797334
+        const char *cmd[] = {GPG_CONNECT_AGENT, "--agent-program", "/dev/null", NULL};
+        if (autostart) {
+            cmd[1] = NULL;
+        }
 
-    struct userinfo *user;
-    if (!get_userinfo(pamh, &user)) {
-        return false;
-    }
-
-    char *keygrip_file;
-    if (asprintf(&keygrip_file, "%s/.pam-gnupg", user->home) < 0) {
-        goto end;
-    }
-    FILE *file = fopen(keygrip_file, "r");
-    free(keygrip_file);
-    if (file == NULL) {
-        return false;
-    }
-
-    struct sigaction *handlers = NULL;
-    setup_sigs(&handlers);
-    if (handlers == NULL) {
-        goto end;
+        char **env = pam_getenvlist(pamh);
+        if (env != NULL) {
+            execve(cmd[0], (char * const *) cmd, env);
+        } else {
+            execv(cmd[0], (char * const *) cmd);
+        }
     }
 
-    /* gpg-connect-agent has an option --no-autostart, which *should* return
-     * non-zero when the agent is not running. Unfortunately, the exit code is
-     * always 0 in version 2.1. Passing an invalid agent program here is a
-     * workaround. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=797334 */
-    const char *cmd[] = {GPG_CONNECT_AGENT, "--agent-program", "/dev/null", NULL};
-    if (autostart) {
-        cmd[1] = NULL;
-    }
-
-    int input;
-    char **env = pam_getenvlist(pamh);
-    const int pid = run_as_user(user, cmd, &input, env);
-    if (env != NULL) {
-        free(env);
-    }
-    if (pid == 0 || input < 0) {
-        goto end;
-    }
+    close(inp[READ_END]);
 
     char *presetcmd;
     const int presetlen = asprintf(&presetcmd, "PRESET_PASSPHRASE xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -1 %s\n", tok);
     if (presetlen < 0) {
-        presetcmd = NULL;
-        goto end;
+        exit(EXIT_FAILURE);
     }
     char * const keygrip = presetcmd + 18;
 
     char *line = NULL;
     size_t len = 0;
-    while (getline(&line, &len, file) != -1) {
+    ssize_t rd;
+    while ((rd = getline(&line, &len, file)) != -1) {
+        if (line[rd-1] == '\n') {
+            line[rd-1] = '\0';
+        }
         const char *cur = line;
         while (*cur && strchr(" \t\n\r\f\v", *cur)) {
             cur++;
@@ -273,33 +184,22 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
         }
         strncpy(keygrip, cur, KEYGRIP_LENGTH);
         if (strlen(keygrip) < KEYGRIP_LENGTH) {
-            /* We hit eol sooner than expected. */
+            // We hit an unexpected eol or null byte.
             continue;
         }
-        if (write(input, presetcmd, presetlen) < 0) {
-            /* If anything goes wrong, we just stop here. No attempt is made to
-             * clean passphrases that were set in a previous iteration. */
-            close(input);
-            goto end;
+        if (write(inp[WRITE_END], presetcmd, presetlen) < 0) {
+            exit(EXIT_FAILURE);
         }
     }
 
     int status;
-    close(input);
+    close(inp[WRITE_END]);
     waitpid(pid, &status, 0);
-    ret = (WIFEXITED(status) && WEXITSTATUS(status) == 0);
-
-end:
-    wipestr(presetcmd);
-    restore_sigs(handlers);
-    free_userinfo(user);
-    if (file != NULL) {
-        fclose(file);
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        exit(EXIT_SUCCESS);
+    } else {
+        exit(EXIT_FAILURE);
     }
-    if (line != NULL) {
-        free(line);
-    }
-    return ret;
 }
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {

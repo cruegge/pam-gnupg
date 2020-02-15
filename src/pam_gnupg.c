@@ -157,6 +157,7 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
         } else {
             execv(cmd[0], (char * const *) cmd);
         }
+        exit(EXIT_FAILURE);
     }
 
     close(inp[READ_END]);

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 
+#include <errno.h>
 #include <fcntl.h>
 #include <pwd.h>
 #include <stdbool.h>
@@ -12,42 +13,14 @@
 #define PAM_SM_AUTH
 #define PAM_SM_SESSION
 
-#include <security/pam_appl.h>
-#include <security/pam_ext.h>
 #include <security/pam_modules.h>
+#include <security/pam_modutil.h>
 
 #include "config.h"
 
-#define KEYGRIP_LENGTH 40
+#define TOKEN_DATA_NAME "pam-gnupg-token"
 
-#define READ_END 0
-#define WRITE_END 1
-
-char tohex(char n) {
-    if (n < 10) {
-        return n + '0';
-    } else {
-        return n - 10 + 'A';
-    }
-}
-
-/* Copied from gnupg */
-char *hexify(const char *token) {
-    char *result = malloc(2*strlen(token)+1);
-    char *r;
-    const char *s;
-    if (result == NULL) {
-        return NULL;
-    }
-    for (s = token, r = result; *s; s++) {
-        *r++ = tohex((*s>>4) & 15);
-        *r++ = tohex(*s & 15);
-    }
-    *r = 0;
-    return result;
-}
-
-/* Copied from gnome-keyring */
+// Copied from gnome-keyring
 void wipestr(char *data) {
     volatile char *vp;
     size_t len;
@@ -76,166 +49,156 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
         return false;
     }
 
-    struct passwd *pwd = getpwnam(user);
+    struct passwd *pwd = pam_modutil_getpwnam(pamh, user);
     if (pwd == NULL) {
         return false;
     }
+    uid_t uid = pwd->pw_uid;
+    gid_t gid = pwd->pw_gid;
 
-    struct sigaction sigchld, old_sigchld;
-    memset(&sigchld, 0, sizeof(sigchld));
-    memset(&old_sigchld, 0, sizeof(old_sigchld));
-    sigchld.sa_handler = SIG_DFL;
-    sigaction(SIGCHLD, &sigchld, &old_sigchld);
+    int pipefd[2];
+    if (pipe2(pipefd, O_CLOEXEC) < 0) {
+        return false;
+    }
+
+    // Reset SIGCHLD handler so we can use waitpid(). If the calling process
+    // used a handler to manage its own child processes, and one of the
+    // children exits while we're busy, things will probably break, but there
+    // does not appear to be a sane way of avoiding this.
+    //
+    // TODO Add a noreap option like pam_unix to selectively disable this for
+    // services that are able to handle it.
+    struct sigaction sa, saved_sigchld;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_handler = SIG_DFL;
+    sa.sa_flags = 0;
+    sigaction(SIGCHLD, &sa, &saved_sigchld);
+
+    // pam_getenvlist() allocates, so we can't call it after fork().
+    char **env = pam_getenvlist(pamh);
+
+    bool ret = true;
 
     pid_t pid = fork();
-    if (pid == -1) {
-        sigaction(SIGCHLD, &old_sigchld, NULL);
-        return false;
-    } else if (pid > 0) {
-        int status;
-        waitpid(pid, &status, 0);
-        sigaction(SIGCHLD, &old_sigchld, NULL);
-        return (WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS);
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        ret = false;
     }
 
-    // We're in the child process now. From here on, the function will not return.
-
-    if (setregid(pwd->pw_gid, pwd->pw_gid) < 0 || setreuid(pwd->pw_uid, pwd->pw_uid) < 0) {
-        exit(EXIT_FAILURE);
-    }
-
-    int inp[2] = {-1, -1};
-    if (pipe(inp) < 0) {
-        exit(EXIT_FAILURE);
-    }
-    signal(SIGPIPE, SIG_IGN);
-
-    int dev_null = open("/dev/null", O_RDWR);
-    if (dev_null != -1) {
-        dup2(dev_null, STDIN_FILENO);
-        dup2(dev_null, STDOUT_FILENO);
-        dup2(dev_null, STDERR_FILENO);
-        close(dev_null);
-    }
-
-    int dirfd = open(pwd->pw_dir, O_RDONLY | O_CLOEXEC);
-    if (dirfd < 0) {
-        exit(EXIT_FAILURE);
-    }
-    int fd = openat(dirfd, ".pam-gnupg", O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-        exit(EXIT_FAILURE);
-    }
-    FILE *file = fdopen(fd, "r");
-    if (file == NULL) {
-        exit(EXIT_FAILURE);
-    }
-
-    pid = fork();
-    if (pid == -1) {
-        exit(EXIT_FAILURE);
-    } else if (pid == 0) {
-        // Grandchild
-        if (dup2(inp[READ_END], STDIN_FILENO) < 0) {
+    else if (pid == 0) {
+        if (setregid(gid, gid) < 0 || setreuid(uid, uid) < 0) {
             exit(EXIT_FAILURE);
         }
-        close(inp[READ_END]);
-        close(inp[WRITE_END]);
 
-        // gpg-connect-agent has an option --no-autostart, which *should* return
-        // non-zero when the agent is not running. Unfortunately, the exit code is
-        // always 0 in version 2.1. Passing an invalid agent program here is a
-        // workaround. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=797334
-        const char *cmd[] = {GPG_CONNECT_AGENT, "--agent-program", "/dev/null", NULL};
-        if (autostart) {
+        // Unblock all signals. fork() clears pending signals in the child, so
+        // this is safe.
+        sigset_t emptyset;
+        sigemptyset(&emptyset);
+        sigprocmask(SIG_SETMASK, &emptyset, NULL);
+
+        if (dup2(pipefd[0], STDIN_FILENO) < 0) {
+            exit(EXIT_FAILURE);
+        }
+        int dev_null = open("/dev/null", O_WRONLY | O_CLOEXEC);
+        if (dev_null != -1) {
+            dup2(dev_null, STDOUT_FILENO);
+            dup2(dev_null, STDERR_FILENO);
+        }
+
+        int maxfd = getdtablesize();
+        for (int n = 3; n < maxfd; n++) {
+            close(n);
+        }
+
+        char * cmd[] = {PAM_GNUPG_HELPER, "--autostart", NULL};
+        if (!autostart) {
             cmd[1] = NULL;
         }
-
-        char **env = pam_getenvlist(pamh);
         if (env != NULL) {
-            execve(cmd[0], (char * const *) cmd, env);
+            execve(cmd[0], cmd, env);
         } else {
-            execv(cmd[0], (char * const *) cmd);
+            execv(cmd[0], cmd);
         }
         exit(EXIT_FAILURE);
     }
 
-    close(inp[READ_END]);
-
-    char *presetcmd;
-    const int presetlen = asprintf(&presetcmd, "PRESET_PASSPHRASE xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -1 %s\n", tok);
-    if (presetlen < 0) {
-        exit(EXIT_FAILURE);
-    }
-    char * const keygrip = presetcmd + 18;
-
-    char *line = NULL;
-    size_t len = 0;
-    ssize_t rd;
-    while ((rd = getline(&line, &len, file)) != -1) {
-        if (line[rd-1] == '\n') {
-            line[rd-1] = '\0';
+    else {
+        if (pam_modutil_write(pipefd[1], tok, strlen(tok)) < 0) {
+            ret = false;
         }
-        const char *cur = line;
-        while (*cur && strchr(" \t\n\r\f\v", *cur)) {
-            cur++;
-        }
-        if (!*cur || *cur == '#') {
-            continue;
-        }
-        strncpy(keygrip, cur, KEYGRIP_LENGTH);
-        if (strlen(keygrip) < KEYGRIP_LENGTH) {
-            // We hit an unexpected eol or null byte.
-            continue;
-        }
-        if (write(inp[WRITE_END], presetcmd, presetlen) < 0) {
-            exit(EXIT_FAILURE);
-        }
+        // We close the read fd after writing in order to avoid SIGPIPE. Since
+        // we write at most MAX_PASSPHRASE_LEN bytes, the pipe buffer won't
+        // fill up and block us even if the child process dies.
+        close(pipefd[0]);
+        close(pipefd[1]);
+        int status;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+            ;
+        ret = ret && WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS;
     }
 
-    int status;
-    close(inp[WRITE_END]);
-    waitpid(pid, &status, 0);
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-        exit(EXIT_SUCCESS);
-    } else {
-        exit(EXIT_FAILURE);
-    }
+    free(env);
+    sigaction(SIGCHLD, &saved_sigchld, NULL);
+    return ret;
 }
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tok = NULL;
-    if (pam_get_item(pamh, PAM_AUTHTOK, (const void **) &tok) == PAM_SUCCESS && tok != NULL) {
-        tok = hexify(tok);
-        if (tok != NULL) {
-            pam_set_data(pamh, "pam-gnupg-token", (void *) tok, cleanup_token);
-        }
+    if (pam_get_item(pamh, PAM_AUTHTOK, (const void **) &tok) != PAM_SUCCESS
+            || tok == NULL
+    ) {
+        return PAM_AUTHINFO_UNAVAIL;
     }
+    // Copy not more bytes than gpg-agent is able to handle.
+    tok = strndup(tok, MAX_PASSPHRASE_LEN);
+    if (tok == NULL) {
+        return PAM_SYSTEM_ERR;
+    }
+    pam_set_data(pamh, TOKEN_DATA_NAME, (void *) tok, cleanup_token);
     return PAM_SUCCESS;
 }
 
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tok = NULL;
-    if ((argc > 0 && strcmp(argv[0], "store-only") == 0) ||
-        (flags & PAM_DELETE_CRED) ||
-        pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) != PAM_SUCCESS ||
-        tok == NULL) {
+    if (flags & PAM_DELETE_CRED) {
         return PAM_SUCCESS;
+    }
+    if (pam_get_data(pamh, TOKEN_DATA_NAME, (const void **) &tok) != PAM_SUCCESS
+            || tok == NULL
+    ) {
+        return PAM_IGNORE;
+    }
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "store-only") == 0) {
+            return PAM_SUCCESS;
+        }
     }
     if (!preset_passphrase(pamh, tok, false)) {
         return PAM_IGNORE;
     }
-    pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);
+    pam_set_data(pamh, TOKEN_DATA_NAME, NULL, NULL);
     return PAM_SUCCESS;
 }
 
 int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tok = NULL;
-    if (pam_get_data(pamh, "pam-gnupg-token", (const void **) &tok) == PAM_SUCCESS && tok != NULL) {
-        preset_passphrase(pamh, tok, (argc == 0 || strcmp(argv[0], "no-autostart") != 0));
-        pam_set_data(pamh, "pam-gnupg-token", NULL, NULL);
+    int ret = PAM_SUCCESS;
+    bool autostart = true;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "no-autostart") == 0) {
+            autostart = false;
+        }
     }
-    return PAM_SUCCESS;
+    if (pam_get_data(pamh, TOKEN_DATA_NAME, (const void **) &tok) == PAM_SUCCESS
+            && tok != NULL
+    ) {
+        if (!preset_passphrase(pamh, tok, autostart)) {
+            ret = PAM_SESSION_ERR;
+        }
+        pam_set_data(pamh, TOKEN_DATA_NAME, NULL, NULL);
+    }
+    return ret;
 }
 
 int pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {

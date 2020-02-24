@@ -47,6 +47,10 @@ fi
 AC_DEFINE_UNQUOTED([GPG_CONNECT_AGENT], "$GPG_CONNECT_AGENT",
                    [path to gpg-connect-agent])
 
+# From https://github.com/gpg/gnupg/blob/4c43fab/agent/agent.h#L54
+AC_DEFINE([MAX_PASSPHRASE_LEN], [255],
+          [Maximum passphrase length accepted by gpg-agent])
+
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_FILES([Makefile src/Makefile])
 AC_OUTPUT

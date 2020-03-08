@@ -7,12 +7,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <unistd.h>
 #include <wait.h>
 
 #define PAM_SM_AUTH
 #define PAM_SM_SESSION
 
+#include <security/pam_ext.h>
 #include <security/pam_modules.h>
 #include <security/pam_modutil.h>
 
@@ -51,6 +53,7 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
 
     struct passwd *pwd = pam_modutil_getpwnam(pamh, user);
     if (pwd == NULL) {
+        pam_syslog(pamh, LOG_ERR, "failed to get user info");
         return false;
     }
     uid_t uid = pwd->pw_uid;
@@ -58,6 +61,7 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
 
     int pipefd[2];
     if (pipe2(pipefd, O_CLOEXEC) < 0) {
+        pam_syslog(pamh, LOG_ERR, "failed to open pipe: %m");
         return false;
     }
 
@@ -81,14 +85,16 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
 
     pid_t pid = fork();
     if (pid < 0) {
+        pam_syslog(pamh, LOG_ERR, "failed to fork: %m");
         close(pipefd[0]);
         close(pipefd[1]);
         ret = false;
     }
 
     else if (pid == 0) {
-        if (setregid(gid, gid) < 0 || setreuid(uid, uid) < 0) {
-            exit(EXIT_FAILURE);
+        // TODO what about supplementary groups?
+        if (setregid(gid, gid) < 0 ||setreuid(uid, uid) < 0) {
+            exit(errno);
         }
 
         // Unblock all signals. fork() clears pending signals in the child, so
@@ -98,7 +104,7 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
         sigprocmask(SIG_SETMASK, &emptyset, NULL);
 
         if (dup2(pipefd[0], STDIN_FILENO) < 0) {
-            exit(EXIT_FAILURE);
+            exit(errno);
         }
         int dev_null = open("/dev/null", O_WRONLY | O_CLOEXEC);
         if (dev_null != -1) {
@@ -120,11 +126,12 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
         } else {
             execv(cmd[0], cmd);
         }
-        exit(EXIT_FAILURE);
+        exit(errno);
     }
 
     else {
         if (pam_modutil_write(pipefd[1], tok, strlen(tok)) < 0) {
+            pam_syslog(pamh, LOG_ERR, "failed to write to pipe: %m");
             ret = false;
         }
         // We close the read fd after writing in order to avoid SIGPIPE. Since
@@ -135,7 +142,19 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
         int status;
         while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
             ;
-        ret = ret && WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS;
+        if (WIFEXITED(status)) {
+            status = WEXITSTATUS(status);
+            if (status != EXIT_SUCCESS) {
+                pam_syslog(pamh, LOG_ERR, "helper terminated with exit code %d", status);
+                ret = false;
+            }
+        } else if (WIFSIGNALED(status)) {
+            pam_syslog(pamh, LOG_ERR, "helper killed by signal %d", WTERMSIG(status));
+            ret = false;
+        } else {
+            pam_syslog(pamh, LOG_ERR, "helper returned unknown status code %d", status);
+            ret = false;
+        }
     }
 
     free(env);

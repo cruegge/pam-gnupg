@@ -19,6 +19,8 @@
 #define xstr(x) str(x)
 #define str(x) #x
 
+#define die(...) do { syslog(LOG_ERR, __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
+
 char tohex(char n) {
     if (n < 10) {
         return n + '0';
@@ -53,6 +55,41 @@ bool nextkeygrip(FILE *f) {
     }
 }
 
+FILE *open_config(char *homedir) {
+    if (chdir(homedir) < 0) {
+        if (errno == ENOENT) {
+            exit(EXIT_SUCCESS);
+        }
+        die("failed to open home directory: %m");
+    }
+
+    FILE *f = fopen(".pam-gnupg", "re");
+    if (f != NULL) {
+        return f;
+    }
+    if (errno != ENOENT) {
+        die("failed to open config file: %m");
+    }
+
+    if (chdir(getenv("XDG_CONFIG_HOME") ?: ".config") < 0) {
+        if (errno == ENOENT) {
+            exit(EXIT_SUCCESS);
+        }
+        die("failed to open config directory: %m");
+    }
+
+    f = fopen("pam-gnupg", "re");
+    if (f != NULL) {
+        return f;
+    }
+    if (errno != ENOENT) {
+        die("failed to open config file: %m");
+    }
+
+    exit(EXIT_SUCCESS);
+}
+
+
 int main(int argc, char **argv) {
     bool autostart = false;
     for (int i = 1; i < argc; i++) {
@@ -67,37 +104,17 @@ int main(int argc, char **argv) {
     struct passwd *pwd = getpwuid(getuid());
     if (pwd == NULL) {
         if (errno == 0) {
-            syslog(LOG_ERR, "getpwuid failed: User not found");
+            die("getpwuid failed: User not found");
         } else {
-            syslog(LOG_ERR, "getpwuid failed: %m");
+            die("getpwuid failed: %m");
         }
-        exit(EXIT_FAILURE);
     }
 
-    int dirfd = open(pwd->pw_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (dirfd < 0) {
-        syslog(LOG_ERR, "failed to open home directory: %m");
-        exit(EXIT_FAILURE);
-    }
-    int fd = openat(dirfd, ".pam-gnupg", O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-        if (errno == ENOENT) {
-            exit(EXIT_SUCCESS);
-        } else {
-            syslog(LOG_ERR, "failed to open config file: %m");
-            exit(EXIT_FAILURE);
-        }
-    }
-    FILE *f = fdopen(fd, "r");
-    if (f == NULL) {
-        syslog(LOG_ERR, "failed to fdopen config file: %m");
-        exit(EXIT_FAILURE);
-    }
+    FILE *f = open_config(pwd->pw_dir);
 
     char tok[MAX_PASSPHRASE_LEN + 1];
     if (fgets(tok, MAX_PASSPHRASE_LEN + 1, stdin) == NULL) {
-        syslog(LOG_ERR, "failed to read passphrase: %m");
-        exit(EXIT_FAILURE);
+        die("failed to read passphrase: %m");
     }
 
     char hextok[2 * MAX_PASSPHRASE_LEN + 1];
@@ -111,24 +128,21 @@ int main(int argc, char **argv) {
 
     int pipefd[2];
     if (pipe2(pipefd, O_CLOEXEC) < 0) {
-        syslog(LOG_ERR, "failed to open pipe: %m");
-        exit(EXIT_FAILURE);
+        die("failed to open pipe: %m");
     }
 
     FILE *p = fdopen(pipefd[1], "w");
     if (p == NULL) {
-        syslog(LOG_ERR, "failed to fdopen pipe: %m");
-        exit(EXIT_FAILURE);
+        die("failed to fdopen pipe: %m");
     }
 
     signal(SIGCHLD, SIG_DFL);
     pid_t pid = fork();
     if (pid == -1) {
-        syslog(LOG_ERR, "fork failed: %m");
-        exit(EXIT_FAILURE);
+        die("fork failed: %m");
     } else if (pid == 0) {
         if (dup2(pipefd[0], STDIN_FILENO) < 0) {
-            exit(errno);
+            die("dup failed: %m");
         }
         // gpg-connect-agent has an option --no-autostart, which *should* return
         // non-zero when the agent is not running. Unfortunately, the exit code is
@@ -139,13 +153,12 @@ int main(int argc, char **argv) {
             cmd[1] = NULL;
         }
         execv(cmd[0], cmd);
-        exit(errno);
+        die("exec failed: %m");
     }
 
     close(pipefd[0]);
 
     signal(SIGPIPE, SIG_IGN);
-    int ret = EXIT_SUCCESS;
     for (; nextkeygrip(f); nextline(f)) {
         char keygrip[KEYGRIP_LEN + 1];
         if (fscanf(f, "%" xstr(KEYGRIP_LEN) "[0-9A-Fa-f]", keygrip) < 1) {
@@ -158,9 +171,7 @@ int main(int argc, char **argv) {
             *s = toupper(*s);
         }
         if (fprintf(p, "preset_passphrase %s -1 %s\n", keygrip, hextok) < 0) {
-            syslog(LOG_ERR, "failed to write to pipe: %m");
-            ret = EXIT_FAILURE;
-            break;
+            die("failed to write to pipe: %m");
         }
     }
 
@@ -171,15 +182,12 @@ int main(int argc, char **argv) {
     if (WIFEXITED(status)) {
         status = WEXITSTATUS(status);
         if (status == EXIT_SUCCESS) {
-            return ret;
+            exit(EXIT_SUCCESS);
         }
-        syslog(LOG_ERR, "child terminated with exit code %d", status);
-        return EXIT_FAILURE;
+        die("child terminated with exit code %d", status);
     } else if (WIFSIGNALED(status)) {
-        syslog(LOG_ERR, "child killed by signal %d", WTERMSIG(status));
-        return EXIT_FAILURE;
+        die("child killed by signal %d", WTERMSIG(status));
     } else {
-        syslog(LOG_ERR, "child returned unknown status code %d", status);
-        return EXIT_FAILURE;
+        die("child returned unknown status code %d", status);
     }
 }

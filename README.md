@@ -129,6 +129,29 @@ adding
 to `~/.pam_environment`. Just make sure that `pam_env.so` is run before
 `pam_gnupg.so`.
 
+### SSH Keys
+
+pam_gnupg indirectly supports unlocking SSH keys via gpg-agent's built-in SSH
+agent, documented in `gpg-agent(1)`. To use it, you first need to set the
+`SSH_AUTH_SOCK` variable to gpg-agent's SSH socket, e.g. via
+`.{,z,bash_}profile`,
+
+```
+export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
+```
+
+or via `.pam_environment`, see above. Note that `pam_env` does not support
+subshells, you'll need to set the explicit path there. Afterwards, SSH keys can
+be imported to the agent using `ssh-add`. This only needs to be done once,
+afterwards the keys are stored by the agent independently of the files in
+`~/.ssh`. Finally, obtain the keygrip from
+
+```
+gpg-connect-agent 'keyinfo --ssh-list' /bye
+```
+
+and add it to `.pam_gnupg` as described above.
+
 ## Contact
 
 - Email: mail@cxcs.de, [gpg key][]. The `gpg -K` output above is real, so the second line is the actual fingerprint.

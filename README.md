@@ -89,7 +89,12 @@ to have it expire after a day.
 
 ### Key selection
 
-The keygrips of all keys to be unlocked should be written to `~/.pam-gnupg`, one
+The default config file is `~/.pam-gnupg`. If that is not found,
+`$XDG_CONFIG_HOME/pam-gnupg` is checked, with `XDG_CONFIG_HOME` defaulting to
+`~/.config` as usual. If you want to change `XDG_CONFIG_HOME`, make sure to do it
+via `.pam_environment` (see below), not your shell init file.
+
+The keygrips of all keys to be unlocked should be written to config file, one
 per line. Empty lines and lines starting with `#` are ignored, as is whitespace
 at the beginning of the line. Keygrips should be exactly 40 characters in
 length. Everything after that is ignored as well, so you can also add comments

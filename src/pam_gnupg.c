@@ -45,7 +45,7 @@ void cleanup_token(pam_handle_t *pamh, void *data, int error_status) {
     wipestr(data);
 }
 
-bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
+bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart, bool send_env) {
     const char *user = NULL;
     if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || user == NULL) {
         return false;
@@ -65,6 +65,16 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
         return false;
     }
 
+    // pam_getenvlist() allocates, so we can't call it after fork().
+    char **env = NULL;
+    if (send_env) {
+        env = pam_getenvlist(pamh);
+        if (env == NULL) {
+            pam_syslog(pamh, LOG_ERR, "failed to read pam environment");
+            return false;
+        }
+    }
+
     // Reset SIGCHLD handler so we can use waitpid(). If the calling process
     // used a handler to manage its own child processes, and one of the
     // children exits while we're busy, things will probably break, but there
@@ -77,9 +87,6 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
     sa.sa_handler = SIG_DFL;
     sa.sa_flags = 0;
     sigaction(SIGCHLD, &sa, &saved_sigchld);
-
-    // pam_getenvlist() allocates, so we can't call it after fork().
-    char **env = pam_getenvlist(pamh);
 
     bool ret = true;
 
@@ -121,7 +128,7 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart) {
         if (!autostart) {
             cmd[1] = NULL;
         }
-        if (env != NULL) {
+        if (send_env) {
             execve(cmd[0], cmd, env);
         } else {
             execv(cmd[0], cmd);
@@ -193,7 +200,7 @@ int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
             return PAM_SUCCESS;
         }
     }
-    if (!preset_passphrase(pamh, tok, false)) {
+    if (!preset_passphrase(pamh, tok, false, false)) {
         return PAM_IGNORE;
     }
     pam_set_data(pamh, TOKEN_DATA_NAME, NULL, NULL);
@@ -212,7 +219,7 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
     if (pam_get_data(pamh, TOKEN_DATA_NAME, (const void **) &tok) == PAM_SUCCESS
             && tok != NULL
     ) {
-        if (!preset_passphrase(pamh, tok, autostart)) {
+        if (!preset_passphrase(pamh, tok, autostart, true)) {
             ret = PAM_SESSION_ERR;
         }
         pam_set_data(pamh, TOKEN_DATA_NAME, NULL, NULL);

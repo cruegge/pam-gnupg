@@ -48,6 +48,7 @@ void cleanup_token(pam_handle_t *pamh, void *data, int error_status) {
 bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart, bool send_env) {
     const char *user = NULL;
     if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || user == NULL) {
+        pam_syslog(pamh, LOG_ERR, "failed to get username");
         return false;
     }
 
@@ -100,7 +101,7 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart, bool
 
     else if (pid == 0) {
         // TODO what about supplementary groups?
-        if (setregid(gid, gid) < 0 ||setreuid(uid, uid) < 0) {
+        if (setregid(gid, gid) < 0 || setreuid(uid, uid) < 0) {
             exit(errno);
         }
 
@@ -171,60 +172,106 @@ bool preset_passphrase(pam_handle_t *pamh, const char *tok, bool autostart, bool
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tok = NULL;
+    bool debug = false;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "debug") == 0) {
+            debug = true;
+        }
+        else if (strcmp(argv[i], "store-only") == 0) {
+            // unused here
+        }
+        else {
+            pam_syslog(pamh, LOG_ERR, "invalid option: %s", argv[i]);
+            return PAM_IGNORE;
+        }
+    }
     if (pam_get_item(pamh, PAM_AUTHTOK, (const void **) &tok) != PAM_SUCCESS
             || tok == NULL
     ) {
+        if (debug) pam_syslog(pamh, LOG_DEBUG, "failed to obtain passphrase");
         return PAM_AUTHINFO_UNAVAIL;
     }
-    // Copy not more bytes than gpg-agent is able to handle.
+    // Don't copy more bytes than gpg-agent is able to handle.
     tok = strndup(tok, MAX_PASSPHRASE_LEN);
     if (tok == NULL) {
+        pam_syslog(pamh, LOG_ERR, "failed to copy passphrase");
         return PAM_SYSTEM_ERR;
     }
-    pam_set_data(pamh, TOKEN_DATA_NAME, (void *) tok, cleanup_token);
+    if (pam_set_data(pamh, TOKEN_DATA_NAME, (void *) tok, cleanup_token) != PAM_SUCCESS) {
+        pam_syslog(pamh, LOG_ERR, "failed to store passphrase");
+        return PAM_IGNORE;
+    }
+    if (debug) pam_syslog(pamh, LOG_DEBUG, "stored passphrase");
     return PAM_SUCCESS;
 }
 
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tok = NULL;
-    if (flags & PAM_DELETE_CRED) {
-        return PAM_SUCCESS;
-    }
-    if (pam_get_data(pamh, TOKEN_DATA_NAME, (const void **) &tok) != PAM_SUCCESS
-            || tok == NULL
-    ) {
-        return PAM_IGNORE;
-    }
+    bool debug = false;
+    bool store_only = false;
     for (int i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "store-only") == 0) {
-            return PAM_SUCCESS;
+        if (strcmp(argv[i], "debug") == 0) {
+            debug = true;
+        }
+        else if (strcmp(argv[i], "store-only") == 0) {
+            store_only = true;
+        }
+        else {
+            pam_syslog(pamh, LOG_ERR, "invalid option: %s", argv[i]);
+            return PAM_IGNORE;
         }
     }
-    if (!preset_passphrase(pamh, tok, false, false)) {
+    if (store_only) {
+        if (debug) pam_syslog(pamh, LOG_DEBUG, "store-only set, skipping");
+        return PAM_SUCCESS;
+    }
+    if (flags & PAM_DELETE_CRED) {
+        if (debug) pam_syslog(pamh, LOG_DEBUG, "PAM_DELETE_CRED set, skipping");
+        return PAM_SUCCESS;
+    }
+    if (pam_get_data(pamh, TOKEN_DATA_NAME, (const void **) &tok) != PAM_SUCCESS || tok == NULL) {
+        if (debug) pam_syslog(pamh, LOG_DEBUG, "unable to obtain stored passphrase");
         return PAM_IGNORE;
     }
-    pam_set_data(pamh, TOKEN_DATA_NAME, NULL, NULL);
-    return PAM_SUCCESS;
+    if (preset_passphrase(pamh, tok, false, false)) {
+        if (debug) pam_syslog(pamh, LOG_DEBUG, "presetting succeeded, cleaning up");
+        pam_set_data(pamh, TOKEN_DATA_NAME, NULL, NULL);
+        return PAM_SUCCESS;
+    } else {
+        if (debug) pam_syslog(pamh, LOG_DEBUG, "presetting failed, retaining passphrase");
+        return PAM_IGNORE;
+    }
 }
 
 int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tok = NULL;
-    int ret = PAM_SUCCESS;
+    bool debug = false;
     bool autostart = true;
     for (int i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "no-autostart") == 0) {
+        if (strcmp(argv[i], "debug") == 0) {
+            debug = true;
+        }
+        else if (strcmp(argv[i], "no-autostart") == 0) {
             autostart = false;
         }
-    }
-    if (pam_get_data(pamh, TOKEN_DATA_NAME, (const void **) &tok) == PAM_SUCCESS
-            && tok != NULL
-    ) {
-        if (!preset_passphrase(pamh, tok, autostart, true)) {
-            ret = PAM_SESSION_ERR;
+        else {
+            pam_syslog(pamh, LOG_ERR, "invalid option: %s", argv[i]);
+            return PAM_IGNORE;
         }
-        pam_set_data(pamh, TOKEN_DATA_NAME, NULL, NULL);
     }
-    return ret;
+    if (pam_get_data(pamh, TOKEN_DATA_NAME, (const void **) &tok) != PAM_SUCCESS || tok == NULL) {
+        if (debug) pam_syslog(pamh, LOG_DEBUG, "unable to obtain stored passphrase");
+        return PAM_SUCCESS;  // this is not necessarily an error, so return PAM_SUCCESS here
+    }
+    if (preset_passphrase(pamh, tok, autostart, true)) {
+        if (debug) pam_syslog(pamh, LOG_DEBUG, "presetting passphrase succeeded, cleaning up");
+        pam_set_data(pamh, TOKEN_DATA_NAME, NULL, NULL);
+        return PAM_SUCCESS;
+    } else {
+        if (debug) pam_syslog(pamh, LOG_DEBUG, "presetting passphrase failed, cleaning up");
+        pam_set_data(pamh, TOKEN_DATA_NAME, NULL, NULL);
+        return PAM_SESSION_ERR;
+    }
 }
 
 int pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {

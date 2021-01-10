@@ -108,7 +108,10 @@ distribution might use a different path.
   tried, with `XDG_CONFIG_HOME` defaulting to `~/.config` as usual. If you want
   to customize this variable, read the section on environment variables below.
 
-- Set the same password for your gpg key and your user account.
+- Set the same password for your gpg key and your user account. All pam-gnupg
+  does is to send the password as entered to gpg-agent. It is therefore not
+  compatible with auto-login of any kind; you actually have to type your
+  password for things to work.
 
 ### SSH Keys
 

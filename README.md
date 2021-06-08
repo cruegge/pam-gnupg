@@ -202,7 +202,13 @@ basic debug logging to syslog / journal.
 
       ExecStartPre=/usr/bin/sleep 5
 
-- Screen lockers need to call `pam_setcred` after authentication to actually send the passphrase. Those who don't will not work with pam-gnupg.
+- Screen lockers need to call `pam_setcred` after authentication to actually
+  send the passphrase. Those who don't will not work with pam-gnupg.
+- Specifically for [suckless' slock](https://tools.suckless.org/slock/) with the
+  [pam-auth
+  patch](https://tools.suckless.org/slock/patches/pam_auth/slock-pam_auth-20190207-35633d4.diff),
+  you have to set `user` and `group` to your user name and your primary group
+  (as displayed by `id -gn`) in slock's `config.h`, which will therefore not work for multiple users. Alternatively, you can try the (untested) steps outlined in [this issue comment](https://github.com/cruegge/pam-gnupg/issues/34#issuecomment-857182214).
 
 ## Contact
 

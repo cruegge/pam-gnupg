@@ -113,6 +113,37 @@ distribution might use a different path.
   compatible with auto-login of any kind; you actually have to type your
   password for things to work.
 
+### `GNUPGHOME`
+
+If you change your gnupg directory from the default `~/.gnupg` by setting
+`GNUPGHOME`, this variable needs to be made available to pam-gnupg when
+presetting. Since PAM usually runs before your init scripts, it needs to obtain
+the variable in a different way.
+
+To set it, add the path to the config file on a separate line before any
+keygrips, either as absolute path or starting with `~/` for paths relative to
+the home directory. The connection to the agent will be opened when the first
+keygrip is read, so setting `GNUPGHOME` after that will have no effect.
+
+Note that the variable is only used for connecting to and optionally
+autostarting the agent. It is *not* passed down to your login shell or desktop
+session, so you also need to set it in your init scripts. Additionally, if you
+start the agent via systemd, you need to adjust the various service and socket
+units separately.
+
+#### Alternatives
+
+If you use `systemd-homed`, you can modify env vars via `homectl --setenv`, and
+they will be made available to PAM by `pam_systemd_home.so`.
+
+Another way is to run `pam_env.so` with `user_readenv=1` before `pam_gnupg.so`,
+so you can set env vars from `~/.pam_environment`, e.g.
+
+    GNUPGHOME DEFAULT=@{HOME}/path/to/your/gnupg
+
+You can also modify `XDG_CONFIG_HOME` this way. Unfortunately, `user_readenv` is
+deprecated and will go away in some future version of `pam_env`.
+
 ### SSH Keys
 
 SSH key support is indirect via gpg-agent's built-in SSH support (there's no
@@ -148,43 +179,6 @@ here's a basic step-by-step guide:
   with one keygrip per line. Alternatively, get them from `~/.gnupg/sshcontrol`.
 
 - Add the keygrips to `~/.pam-gnupg` the same way as for the gpg keys.
-
-### Environment, `GNUPGHOME` & `XDG_CONFIG_HOME`
-
-If you change your gnupg directory from the default `~/.gnupg` by setting
-`GNUPGHOME` (²), or change the config directory via `XDG_CONFIG_HOME`, these
-variables need to be made available to pam-gnupg when presetting.
-
-For the `auth` module (without `store-only`, otherwise it does not matter
-anyway, i.e. mostly for screen lockers), the existing session environment will
-be used, so no additional setup is required.
-
-The `session` module, however, runs before your usual init scripts and
-therefore needs to obtain the environment from PAM. Setting it is easiest using
-`pam_env.so`, which needs to be run before `pam_gnupg.so` and use the
-`user_readenv=1` option. It will then read environment variables from
-`~/.pam_environment`, which should contain lines like
-
-    GNUPGHOME DEFAULT=@{HOME}/path/to/your/gnupg
-    XDG_CONFIG_HOME DEFAULT=@{HOME}/path/to/your/config
-
-(²): Note that changing `GNUPGHOME` changes the agent's socket location, so if
-you start it via systemd, adjust the various `gpg-agent*.socket` units
-accordingly.
-
-#### Caveat
-
-Since PAM version 1.5, `pam_env` emits a deprecation warning when using the
-`user_readenv` option, and some future version will remove it entirely. After
-that, variables can only be set system-wide in `/etc/security/pam_env.conf`
-(which is of course not generally feasible).
-
-For accounts managed by systemd-homed, PAM environment variables can also be
-set via `homectl --setenv`, but other than that, I don't know any option for
-setting per-user variables.
-
-I may add an option to set `GNUPGHOME` in the config file once needed, but
-`XDG_CONFIG_HOME` support can't be fixed this way.
 
 ### Debug output
 

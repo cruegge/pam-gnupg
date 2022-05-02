@@ -39,7 +39,7 @@ void nextline(FILE *f) {
     }
 }
 
-bool nextkeygrip(FILE *f) {
+bool nextentry(FILE *f) {
     int c;
     for (;;) {
         do c = getc(f);
@@ -53,6 +53,32 @@ bool nextkeygrip(FILE *f) {
         }
         nextline(f);
     }
+}
+
+void read_gnupghome(FILE *f, char *homedir) {
+    char *gnupghome = NULL;
+    char *line = NULL;
+    size_t bufsize = 0;
+    size_t len = getline(&line, &bufsize, f);
+    if (len < 0) {
+        die("failed to read GNUPGHOME from file: %m");
+    } else if (len > 0) {
+        if (line[len - 1] = '\n') {
+            line[len - 1] = '\0';
+        }
+        if (line[0] == '~') {
+            if (asprintf(&gnupghome, "%s%s", homedir, line + 1) < 0) {
+                die("tilde expansion failed: %m");
+            }
+            free(line);
+        } else {
+            gnupghome = line;
+        }
+        if (setenv("GNUPGHOME", gnupghome, true) < 0) {
+            die("failed to set GNUPGHOME: %m");
+        }
+    }
+    free(gnupghome);
 }
 
 FILE *open_config(char *homedir) {
@@ -89,6 +115,28 @@ FILE *open_config(char *homedir) {
     exit(EXIT_SUCCESS);
 }
 
+pid_t connect_agent(bool autostart, int pipefd) {
+    pid_t pid = fork();
+    if (pid == -1) {
+        die("fork failed: %m");
+    } else if (pid == 0) {
+        if (dup2(pipefd, STDIN_FILENO) < 0) {
+            die("dup failed: %m");
+        }
+        // gpg-connect-agent has an option --no-autostart, which *should* return
+        // non-zero when the agent is not running. Unfortunately, the exit code is
+        // always 0 in version 2.1. Passing an invalid agent program here is a
+        // workaround. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=797334
+        char *cmd[] = {GPG_CONNECT_AGENT, "--agent-program", "/dev/null", NULL};
+        if (autostart) {
+            cmd[1] = NULL;
+        }
+        execv(cmd[0], cmd);
+        die("exec failed: %m");
+    }
+    close(pipefd);
+    return pid;
+}
 
 int main(int argc, char **argv) {
     bool autostart = false;
@@ -137,29 +185,22 @@ int main(int argc, char **argv) {
     }
 
     signal(SIGCHLD, SIG_DFL);
-    pid_t pid = fork();
-    if (pid == -1) {
-        die("fork failed: %m");
-    } else if (pid == 0) {
-        if (dup2(pipefd[0], STDIN_FILENO) < 0) {
-            die("dup failed: %m");
-        }
-        // gpg-connect-agent has an option --no-autostart, which *should* return
-        // non-zero when the agent is not running. Unfortunately, the exit code is
-        // always 0 in version 2.1. Passing an invalid agent program here is a
-        // workaround. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=797334
-        char *cmd[] = {GPG_CONNECT_AGENT, "--agent-program", "/dev/null", NULL};
-        if (autostart) {
-            cmd[1] = NULL;
-        }
-        execv(cmd[0], cmd);
-        die("exec failed: %m");
-    }
-
-    close(pipefd[0]);
-
     signal(SIGPIPE, SIG_IGN);
-    for (; nextkeygrip(f); nextline(f)) {
+    pid_t pid = 0;
+    for (; nextentry(f); nextline(f)) {
+        int c = getc(f);
+        ungetc(c, f);
+        if (c == '/' || c == '~') {
+            if (pid != 0) {
+                syslog(LOG_WARNING, "Ignored GNUPHOME setting after keygrip.");
+            } else {
+                // TODO Should we send the environment during auth, or completely rely on session env?
+                read_gnupghome(f, pwd->pw_dir);
+                // Push back a newline, so nextline won't skip anything
+                ungetc('\n', f);
+            }
+            continue;
+        }
         char keygrip[KEYGRIP_LEN + 1];
         if (fscanf(f, "%" xstr(KEYGRIP_LEN) "[0-9A-Fa-f]", keygrip) < 1) {
             continue;
@@ -170,12 +211,26 @@ int main(int argc, char **argv) {
         for (s = keygrip; *s; s++) {
             *s = toupper(*s);
         }
+        if (pid == 0) {
+            // Connect when we see the first keygrip to allow setting GNUPGHOME first.
+            pid = connect_agent(autostart, pipefd[0]);
+        }
         if (fprintf(p, "preset_passphrase %s -1 %s\n", keygrip, hextok) < 0) {
             die("failed to write to pipe: %m");
         }
     }
 
+    if (autostart && (pid == 0)) {
+        // We're configured to autostart, but did not encounter any keygrips.
+        pid = connect_agent(autostart, pipefd[0]);
+    }
+
     fclose(p);
+
+    if (pid == 0) {
+        // We're not autostarting and did not encounter any keygrips.
+        exit(EXIT_SUCCESS);
+    }
 
     int status;
     waitpid(pid, &status, 0);

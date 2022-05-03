@@ -207,4 +207,3 @@ basic debug logging to syslog / journal.
 ## Contact
 
 - Email: mail@cxcs.de, [gpg key](https://gist.githubusercontent.com/cruegge/273380ce582d8d6c38b00bfaac433711/raw/3b6d506bd650d2e1b92c138bc608c6c567f048cc/mail@cxcs.de.pub.asc). The `gpg -K` output above is real, so the second line is the actual fingerprint.
-- Keybase: [chrs](https://keybase.io/chrs)

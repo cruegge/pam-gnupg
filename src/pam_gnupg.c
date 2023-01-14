@@ -9,7 +9,7 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
-#include <wait.h>
+#include <sys/wait.h>
 
 #define PAM_SM_AUTH
 #define PAM_SM_SESSION

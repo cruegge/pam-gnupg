@@ -10,7 +10,7 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
-#include <wait.h>
+#include <sys/wait.h>
 
 #include "config.h"
 

@@ -19,6 +19,7 @@
 #include <security/pam_modutil.h>
 
 #include "config.h"
+#include "src/lib.h"
 
 #define TOKEN_DATA_NAME "pam-gnupg-token"
 

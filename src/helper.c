@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 
 #include "config.h"
+#include "src/lib.h"
 
 #define KEYGRIP_LEN 40
 

@@ -63,7 +63,7 @@ void read_gnupghome(FILE *f, char *homedir) {
     if (len < 0) {
         die("failed to read GNUPGHOME from file: %m");
     } else if (len > 0) {
-        if (line[len - 1] = '\n') {
+        if (line[len - 1] == '\n') {
             line[len - 1] = '\0';
         }
         if (line[0] == '~') {

@@ -1,4 +1,4 @@
-AC_INIT([pam-gnupg], [0.1])
+AC_INIT([pam-gnupg], [0.4])
 AC_CONFIG_SRCDIR([src/pam_gnupg.c])
 AC_CONFIG_MACRO_DIRS([m4])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -18,32 +18,32 @@ AC_ARG_WITH([moduledir], AS_HELP_STRING([--with-moduledir=PATH],
 AC_SUBST(moduledir)
 
 AC_CHECK_HEADERS([security/pam_modules.h], [have_pamheader="yes"])
-if test x"$have_pamheader" != x"yes"; then
+AS_IF([test x"$have_pamheader" != x"yes"], [
    AC_MSG_ERROR([You are missing PAM headers])
-fi
+])
 
 AC_CHECK_PROGS([GPGCONF], [gpgconf], [:])
-if test x"$GPGCONF" = x:; then
+AS_IF([test x"$GPGCONF" = x:], [
     AC_MSG_ERROR([gpgconf not found])
-fi
+])
 
 GPG_MIN_VERSION="2.1"
 AC_MSG_CHECKING([whether GnuPG version is >= ${GPG_MIN_VERSION}])
 GPG=$("$GPGCONF" --list-components | "$AWK" -F: '$1=="gpg" {print $3}')
 GPG_VERSION=$("$GPG" --version | "$AWK" 'NR==1 {print $NF}')
 AS_VERSION_COMPARE(${GPG_VERSION}, ${GPG_MIN_VERSION}, [gpg_too_old="yes"])
-if test x"$gpg_too_old" = xyes; then
+AS_IF([test x"$gpg_too_old" = xyes], [
     AC_MSG_RESULT([no])
     AC_MSG_ERROR([GnuPG is too old])
-else
+], [
     AC_MSG_RESULT([yes])
-fi
+])
 
 AC_PATH_PROG(GPG_CONNECT_AGENT, [gpg-connect-agent], [:],
              [$("$GPGCONF" --list-dirs bindir)])
-if test x"$GPG_CONNECT_AGENT" = x:; then
+AS_IF([test x"$GPG_CONNECT_AGENT" = x:], [
     AC_MSG_ERROR([gpg-connect-agent not found])
-fi
+])
 AC_DEFINE_UNQUOTED([GPG_CONNECT_AGENT], "$GPG_CONNECT_AGENT",
                    [path to gpg-connect-agent])
 

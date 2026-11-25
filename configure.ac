@@ -1,4 +1,4 @@
-AC_INIT([pam-gnupg], [0.1])
+AC_INIT([pam-gnupg], [0.4])
 AC_CONFIG_SRCDIR([src/pam_gnupg.c])
 AC_CONFIG_MACRO_DIRS([m4])
 AC_CONFIG_AUX_DIR([build-aux])
